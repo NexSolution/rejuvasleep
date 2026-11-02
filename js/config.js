@@ -9,7 +9,7 @@ window.REJUVA_CONFIG = {
   comparePrice: "$39.99",   // crossed-out "regular" price
   priceNote: "One-time payment · lifetime access",
 
-  supportEmail: "",         // the email customers can contact for help
+  supportEmail: "rejuvasleep.help@gmail.com",  // the email customers can contact for help
 
   // Supabase (public values — safe to be in website code)
   supabaseUrl: "https://ufgsbldkedtguscfdkvg.supabase.co",
