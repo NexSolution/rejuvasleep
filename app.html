@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My RejuvaSleep</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="app-body">
+  <header class="app-top">
+    <div class="wrap">
+      <a href="app.html" class="logo"><span class="moon"></span>RejuvaSleep</a>
+      <div class="who"><span id="whoEmail"></span><button id="logout">Log out</button></div>
+    </div>
+  </header>
+  <nav class="tabs" aria-label="Sections"><div class="wrap" id="tabs"></div></nav>
+  <main class="app-main"><div class="wrap" id="view"><p class="loading">Loading your plan…</p></div></main>
+  <div class="toast" id="toast" role="status"></div>
+
+<script src="js/config.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

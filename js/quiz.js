@@ -315,6 +315,12 @@
         <p style="text-align:center;font-size:.82rem;color:var(--muted);margin-top:12px">Secure checkout with PayPal or card</p>
       </div>
 
+      <div class="result-card" style="text-align:center">
+        <h3 style="font-size:1.3rem;margin-bottom:6px">Not ready yet?</h3>
+        <p style="color:var(--muted);margin-bottom:16px">Save your results and start tracking your sleep with a free account.</p>
+        <a class="btn btn-purple" href="login.html">Save my results free</a>
+      </div>
+
       <p class="disclaimer">Your score is a habits-based estimate for education, not a medical assessment. Talk to a doctor about ongoing sleep problems.</p>`;
 
     requestAnimationFrame(() => setTimeout(() => {

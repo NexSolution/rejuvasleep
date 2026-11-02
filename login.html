@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Log in — RejuvaSleep</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body class="quiz-body">
+  <div class="narrow">
+    <div class="quiz-top"><a href="./" class="logo"><span class="moon"></span>RejuvaSleep</a></div>
+
+    <div class="auth-card" id="card">
+      <div class="seg" role="tablist">
+        <button role="tab" data-mode="signup" class="on">Create account</button>
+        <button role="tab" data-mode="login">Log in</button>
+      </div>
+
+      <h1 id="title">Save your plan</h1>
+      <p class="muted" id="subtitle">Create a free account to keep your quiz results and start tracking your sleep.</p>
+
+      <form id="form" novalidate>
+        <label id="nameRow">First name
+          <input type="text" id="name" autocomplete="given-name" maxlength="40">
+        </label>
+        <label id="emailRow">Email
+          <input type="email" id="email" autocomplete="email" required>
+        </label>
+        <label id="pwRow">Password
+          <input type="password" id="password" autocomplete="new-password" minlength="8" required>
+          <span class="field-hint" id="pwHint">At least 8 characters</span>
+        </label>
+        <p class="form-msg" id="msg" role="alert"></p>
+        <button class="btn btn-gold full" type="submit" id="submit">Create my account</button>
+      </form>
+
+      <button class="link-btn" id="forgot" hidden>Forgot your password?</button>
+      <p class="fine">If you bought RejuvaSleep, use the <strong>same email you paid with on PayPal</strong> so your membership unlocks automatically.</p>
+    </div>
+  </div>
+
+<script src="js/config.js"></script>
+<script type="module">
+import { sb, siteBase, readLocalQuiz, friendlyError } from "./js/supa.js";
+
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+let mode = params.get("mode") === "login" ? "login" : "signup";
+
+const COPY = {
+  signup: { title: "Save your plan", sub: "Create a free account to keep your quiz results and start tracking your sleep.", btn: "Create my account" },
+  login:  { title: "Welcome back", sub: "Log in to see your plan, tracker and rituals.", btn: "Log in" },
+  forgot: { title: "Reset your password", sub: "Enter your email and we'll send you a link to set a new one.", btn: "Send reset link" },
+  reset:  { title: "Set a new password", sub: "Choose a new password for your account.", btn: "Save new password" }
+};
+
+function setMode(m) {
+  mode = m;
+  const c = COPY[m];
+  $("title").textContent = c.title; $("subtitle").textContent = c.sub; $("submit").textContent = c.btn;
+  $("nameRow").hidden = m !== "signup";
+  $("emailRow").hidden = m === "reset";
+  $("pwRow").hidden = m === "forgot";
+  $("pwHint").hidden = !(m === "signup" || m === "reset");
+  $("password").autocomplete = m === "login" ? "current-password" : "new-password";
+  $("forgot").hidden = m !== "login";
+  document.querySelector(".seg").hidden = m === "forgot" || m === "reset";
+  document.querySelectorAll(".seg button").forEach(b => b.classList.toggle("on", b.dataset.mode === m));
+  msg("");
+}
+
+function msg(text, ok) { const el = $("msg"); el.textContent = text; el.className = "form-msg" + (ok ? " ok" : ""); }
+
+document.querySelectorAll(".seg button").forEach(b => b.onclick = () => setMode(b.dataset.mode));
+$("forgot").onclick = () => setMode("forgot");
+
+// Prefill name from the quiz
+const quiz = readLocalQuiz();
+if (quiz && quiz.answers && quiz.answers.name) $("name").value = quiz.answers.name;
+
+// Already logged in? Go straight to the app.
+const { data: { session } } = await sb.auth.getSession();
+if (session && !params.get("reset")) location.replace("app.html");
+
+sb.auth.onAuthStateChange(evt => { if (evt === "PASSWORD_RECOVERY") setMode("reset"); });
+if (params.get("reset")) setMode("reset"); else setMode(mode);
+
+$("form").onsubmit = async e => {
+  e.preventDefault();
+  const email = $("email").value.trim().toLowerCase();
+  const password = $("password").value;
+  const btn = $("submit");
+
+  if (mode !== "reset" && !/^\S+@\S+\.\S+$/.test(email)) return msg("Enter a valid email address.");
+  if ((mode === "signup" || mode === "reset") && password.length < 8) return msg("Your password needs at least 8 characters.");
+  if (mode === "login" && !password) return msg("Enter your password.");
+
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "Please wait…";
+  try {
+    if (mode === "signup") {
+      const { data, error } = await sb.auth.signUp({
+        email, password,
+        options: { data: { name: $("name").value.trim() }, emailRedirectTo: siteBase + "app.html" }
+      });
+      if (error) throw error;
+      if (data.session) return location.replace("app.html");
+      $("form").hidden = true;
+      msg("");
+      $("title").textContent = "Check your email";
+      $("subtitle").innerHTML = "We sent a confirmation link to <strong></strong>. Click it to open your dashboard. (Check spam if you don't see it in a few minutes.)";
+      $("subtitle").querySelector("strong").textContent = email;
+      document.querySelector(".seg").hidden = true;
+    } else if (mode === "login") {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      location.replace("app.html");
+    } else if (mode === "forgot") {
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: siteBase + "login.html?reset=1" });
+      if (error) throw error;
+      msg("If that email has an account, a reset link is on its way.", true);
+    } else if (mode === "reset") {
+      const { error } = await sb.auth.updateUser({ password });
+      if (error) throw error;
+      msg("Password updated. Taking you to your dashboard…", true);
+      setTimeout(() => location.replace("app.html"), 1000);
+    }
+  } catch (err) {
+    msg(friendlyError(err));
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+};
+</script>
+</body>
+</html>

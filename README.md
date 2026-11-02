@@ -1,12 +1,21 @@
 # RejuvaSleep
 
-Quiz funnel and landing page for RejuvaSleep, a sleep and natural anti-aging membership.
+Sleep + natural anti-aging membership. Live at https://nexsolution.github.io/rejuvasleep/
 
+## Pages
 - `index.html` — landing page
-- `quiz.html` + `js/quiz.js` — 10-question Sleep Aging Quiz with personalised results and offer
-- `js/config.js` — **edit this** to set the PayPal link and price
-- `assets/` — images
+- `quiz.html` — Sleep Aging Quiz → score, triggers, plan preview, offer
+- `login.html` — create account, log in, reset password
+- `app.html` — member area: Today, Track (free) · My plan, Face rituals, Learn (members)
 
-Quiz answers are saved in the visitor's browser (`rejuva_quiz`) so the member area can personalise their plan after signup.
+## Settings
+`js/config.js` — PayPal link, price, Supabase URL and public key.
 
-Hosted with GitHub Pages. Member area (accounts, tracker, reminders, weekly tips) comes next with Supabase.
+## Database (Supabase)
+`supabase/SETUP.sql` — paste into Supabase → SQL Editor → Run. Creates profiles, memberships, sleep/water/ritual logs and the members-only library, all with row-level security.
+
+## Giving someone access
+Until the PayPal webhook is connected, add buyers by hand: Supabase → Table Editor → `memberships` → Insert row → `email` = the email they paid with. They unlock instantly (they can tap "Check again" in the app).
+
+## Adding a video
+Table Editor → `library` → Insert row: `slug` (e.g. `gua-sha-video`), `kind` = `video`, `title`, `summary`, `video_url` = YouTube link.
