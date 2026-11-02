@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────
 window.REJUVA_CONFIG = {
   // Paste your PayPal payment link here (keep the quotes)
-  paypalLink: "",
+  paypalLink: "https://www.paypal.com/ncp/payment/AQMMDT5WSD73E",
 
   price: "$19.99",          // what buyers pay
   comparePrice: "$39.99",   // crossed-out "regular" price
