@@ -176,12 +176,11 @@ function render() {
 
 // ── Paywall: no access until paid ────────────────────
 let pollTimer;
+const priceValue = () => (String(CFG.price || "").match(/[\d.]+/) || ["19.99"])[0];
+
 function renderPaywall() {
   renderMenu();
   const p = S.profile, name = p.name ? esc(p.name) : "there";
-  const pay = CFG.paypalLink
-    ? `<a class="btn btn-gold full" href="${esc(CFG.paypalLink)}">Unlock my plan · ${esc(CFG.price || "")}</a>`
-    : `<button class="btn btn-gold full" disabled>Checkout opens soon</button>`;
   view.innerHTML = `<div class="card locked" style="max-width:560px;margin:0 auto">
     <div class="ic">🌙</div>
     <h3>${name === "there" ? "Your" : name + ", your"} plan is ready</h3>
@@ -196,13 +195,75 @@ function renderPaywall() {
     </ul>
     <p class="price" style="font-size:2rem;margin-bottom:4px"><s style="font-size:1rem;color:var(--muted);font-weight:500;margin-right:8px">${esc(CFG.comparePrice || "")}</s>${esc(CFG.price || "")}</p>
     <p class="muted" style="font-size:.88rem;margin-bottom:18px">${esc(CFG.priceNote || "")}</p>
-    ${pay}
-    <p class="fine">Pay with <strong>${esc(S.user.email)}</strong> on PayPal so your account unlocks automatically. This page updates by itself once your payment comes through. <button class="link-btn" id="recheck">Check now</button></p>
+    <div id="paypalButtons" class="pp-wrap"><p class="muted" style="font-size:.9rem">Loading secure checkout…</p></div>
+    <p class="form-msg" id="payMsg" role="status"></p>
+    <p class="fine">Pay with PayPal or a debit/credit card. Your plan unlocks on this page within a few seconds of paying. <button class="link-btn" id="recheck">Check now</button></p>
   </div>`;
   $("recheck").onclick = () => checkMembership(true);
+  mountPayPal();
+  startPolling(8000, 40);
+}
+
+function startPolling(every, max) {
   clearInterval(pollTimer);
   let tries = 0;
-  pollTimer = setInterval(() => { if (++tries > 40) clearInterval(pollTimer); checkMembership(false); }, 8000);
+  pollTimer = setInterval(() => { if (++tries > max) clearInterval(pollTimer); checkMembership(false); }, every);
+}
+
+function loadPayPalSdk() {
+  if (window.paypal) return Promise.resolve(window.paypal);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(CFG.paypalClientId)}&currency=USD&intent=capture`;
+    s.onload = () => window.paypal ? resolve(window.paypal) : reject(new Error("PayPal didn't load"));
+    s.onerror = () => reject(new Error("PayPal didn't load"));
+    document.head.appendChild(s);
+  });
+}
+
+function payFallback(reason) {
+  console.error(reason);
+  const box = $("paypalButtons"); if (!box) return;
+  box.innerHTML = CFG.paypalLink
+    ? `<a class="btn btn-gold full" href="${esc(CFG.paypalLink)}">Unlock my plan · ${esc(CFG.price || "")}</a>
+       <p class="fine">If your plan doesn't unlock within a few minutes of paying, email ${esc(CFG.supportEmail || "us")} and we'll unlock it for you.</p>`
+    : `<p class="muted">Checkout isn't available right now. Please try again shortly.</p>`;
+}
+
+async function mountPayPal() {
+  if (!CFG.paypalClientId) return payFallback("no client id");
+  let paypal;
+  try { paypal = await loadPayPalSdk(); } catch (e) { return payFallback(e); }
+  const box = $("paypalButtons"); if (!box) return;
+  box.innerHTML = "";
+  const msg = (t, ok) => { const el = $("payMsg"); if (el) { el.textContent = t; el.className = "form-msg" + (ok ? " ok" : ""); } };
+  try {
+    await paypal.Buttons({
+      style: { layout: "vertical", color: "gold", shape: "pill", label: "pay" },
+      createOrder: (data, actions) => actions.order.create({
+        purchase_units: [{
+          description: "RejuvaSleep membership (lifetime)",
+          custom_id: S.user.email.slice(0, 127),   // tells our webhook which account to unlock
+          amount: { currency_code: "USD", value: priceValue() }
+        }],
+        application_context: { shipping_preference: "NO_SHIPPING", brand_name: "RejuvaSleep" }
+      }),
+      onApprove: async (data, actions) => {
+        msg("Payment approved — finishing up…", true);
+        try {
+          await actions.order.capture();
+          msg("Payment received! Unlocking your plan…", true);
+          startPolling(3000, 60);
+          checkMembership(false);
+        } catch (e) {
+          console.error(e);
+          msg("PayPal couldn't complete the payment. You haven't been charged — please try again.");
+        }
+      },
+      onCancel: () => msg("Payment cancelled. You haven't been charged."),
+      onError: e => { console.error(e); msg("Something went wrong with PayPal. Please try again, or use a different card."); }
+    }).render("#paypalButtons");
+  } catch (e) { payFallback(e); }
 }
 
 async function checkMembership(manual) {
@@ -213,7 +274,7 @@ async function checkMembership(manual) {
     toast("Payment received. Welcome to RejuvaSleep!");
     go("today");
   } else if (manual) {
-    toast(`No payment found for ${S.user.email} yet. It can take a minute.`);
+    toast("No payment found for your account yet. It can take a minute.");
   }
 }
 

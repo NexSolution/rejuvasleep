@@ -3,7 +3,10 @@
 // ─────────────────────────────────────────────
 window.REJUVA_CONFIG = {
   // Paste your PayPal payment link here (keep the quotes)
-  paypalLink: "https://www.paypal.com/ncp/payment/AQMMDT5WSD73E",
+  paypalLink: "https://www.paypal.com/ncp/payment/AQMMDT5WSD73E",   // backup only
+
+  // PayPal checkout button (public Client ID from your RejuvaSleep PayPal app)
+  paypalClientId: "BAAJsh04g7GeCQy_46Id79gn9L9V2221fTawIO4BbwVCc6srBSGhX9cA4UGut9-3wVAKKeUBtL_2-utOm0",
 
   price: "$19.99",          // what buyers pay
   comparePrice: "$39.99",   // crossed-out "regular" price

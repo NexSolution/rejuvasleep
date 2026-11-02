@@ -87,11 +87,16 @@ Deno.serve(async (req) => {
         console.log(`Ignored capture ${res.id}: amount ${amount} below ${EXPECTED}`);
         return json(200, { ignored: "amount" });
       }
-      const orderId = res.supplementary_data?.related_ids?.order_id;
-      if (!orderId) throw new Error(`Capture ${res.id} has no order id`);
-      const order = await paypalGet(token, `/v2/checkout/orders/${orderId}`);
-      const email = String(order.payer?.email_address || "").trim().toLowerCase();
-      if (!email) throw new Error(`Order ${orderId} has no payer email`);
+      // Prefer the account email the site attached to the order (custom_id),
+      // so the right account unlocks even if they paid with a different PayPal email.
+      let email = String(res.custom_id || "").trim().toLowerCase();
+      if (!email.includes("@")) {
+        const orderId = res.supplementary_data?.related_ids?.order_id;
+        if (!orderId) throw new Error(`Capture ${res.id} has no order id`);
+        const order = await paypalGet(token, `/v2/checkout/orders/${orderId}`);
+        email = String(order.purchase_units?.[0]?.custom_id || order.payer?.email_address || "").trim().toLowerCase();
+      }
+      if (!email.includes("@")) throw new Error(`Capture ${res.id} has no usable email`);
 
       await db("memberships?on_conflict=email", {
         method: "POST",
