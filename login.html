@@ -6,8 +6,8 @@
 <title>Log in — RejuvaSleep</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=5">
-<link rel="stylesheet" href="css/app.css?v=5">
+<link rel="stylesheet" href="css/style.css?v=6">
+<link rel="stylesheet" href="css/app.css?v=6">
 </head>
 <body class="quiz-body">
   <div class="narrow">
@@ -37,12 +37,13 @@
         <button class="btn btn-gold full" type="submit" id="submit">Create my account</button>
       </form>
 
-      <button class="link-btn" id="forgot" hidden>Forgot your password?</button>
+      <button class="link-btn" id="forgot" type="button" hidden>Forgot your password?</button>
+      <p class="switch-line" id="switchLine"></p>
       <p class="fine">Use the <strong>same email you'll pay with on PayPal</strong> so your plan unlocks automatically. Need help? <a href="mailto:rejuvasleep.help@gmail.com" style="color:var(--purple)">rejuvasleep.help@gmail.com</a></p>
     </div>
   </div>
 
-<script src="js/config.js?v=5"></script>
+<script src="js/config.js?v=6"></script>
 <script type="module">
 import { sb, siteBase, readLocalQuiz, friendlyError } from "./js/supa.js";
 
@@ -66,16 +67,21 @@ function setMode(m) {
   $("pwRow").hidden = m === "forgot";
   $("pwHint").hidden = !(m === "signup" || m === "reset");
   $("password").autocomplete = m === "login" ? "current-password" : "new-password";
-  $("forgot").hidden = m !== "login";
+  $("forgot").hidden = !(m === "login" || m === "forgot");
+  $("forgot").textContent = m === "forgot" ? "← Back to log in" : "Forgot your password?";
   document.querySelector(".seg").hidden = m === "forgot" || m === "reset";
   document.querySelectorAll(".seg button").forEach(b => b.classList.toggle("on", b.dataset.mode === m));
   msg("");
+  const sw = $("switchLine");
+  sw.innerHTML = m === "signup" ? 'Already have an account? <button type="button" class="link-btn" data-to="login">Log in</button>'
+    : m === "login" ? 'New here? <button type="button" class="link-btn" data-to="signup">Create an account</button>' : "";
+  sw.querySelectorAll("[data-to]").forEach(b => b.onclick = () => setMode(b.dataset.to));
 }
 
 function msg(text, ok) { const el = $("msg"); el.textContent = text; el.className = "form-msg" + (ok ? " ok" : ""); }
 
 document.querySelectorAll(".seg button").forEach(b => b.onclick = () => setMode(b.dataset.mode));
-$("forgot").onclick = () => setMode("forgot");
+$("forgot").onclick = () => setMode(mode === "forgot" ? "login" : "forgot");
 
 // Prefill name from the quiz
 const quiz = readLocalQuiz();
