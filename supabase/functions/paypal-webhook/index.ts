@@ -7,6 +7,7 @@
 //   PAYPAL_WEBHOOK_ID  The webhook ID PayPal shows after you add the webhook
 //   EXPECTED_AMOUNT    Optional. Minimum payment that counts as a purchase (default 19.99)
 //   PAYPAL_ENV         Optional. "sandbox" for testing; anything else means live
+//   PAYPAL_PLAN_ID     Optional. If set, only subscriptions to this plan unlock access
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically.
 
 const PAYPAL_API = Deno.env.get("PAYPAL_ENV") === "sandbox"
@@ -15,6 +16,9 @@ const PAYPAL_API = Deno.env.get("PAYPAL_ENV") === "sandbox"
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const EXPECTED = Number(Deno.env.get("EXPECTED_AMOUNT") || "19.99");
+
+const PLAN_ID = Deno.env.get("PAYPAL_PLAN_ID") || "";
+const GRACE_DAYS = 3; // access runs a few days past each billing date so a slow renewal never locks someone out
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -65,6 +69,36 @@ async function db(path: string, init: RequestInit) {
   if (!r.ok) throw new Error(`Database ${path} failed: ${r.status} ${await r.text()}`);
 }
 
+const iso = (d: Date) => d.toISOString();
+function paidUntil(sub: any): string {
+  const next = sub?.billing_info?.next_billing_time ? new Date(sub.billing_info.next_billing_time) : null;
+  const base = next && !isNaN(+next) ? next : new Date(Date.now() + 31 * 864e5);
+  return iso(new Date(+base + GRACE_DAYS * 864e5));
+}
+
+// Activate or extend a monthly membership from a PayPal subscription object
+async function grantSubscription(sub: any): Promise<Response> {
+  if (PLAN_ID && sub.plan_id !== PLAN_ID) {
+    console.log(`Ignored subscription ${sub.id}: plan ${sub.plan_id} is not ${PLAN_ID}`);
+    return json(200, { ignored: "plan" });
+  }
+  const email = String(sub.custom_id || sub.subscriber?.email_address || "").trim().toLowerCase();
+  if (!email.includes("@")) throw new Error(`Subscription ${sub.id} has no usable email`);
+  await db("memberships?on_conflict=email", {
+    method: "POST",
+    headers: { prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ email, plan: "monthly", source: "paypal", subscription_id: sub.id, status: "active", paid_until: paidUntil(sub) }),
+  });
+  console.log(`Subscription ${sub.id} active for ${email} until ${paidUntil(sub)}`);
+  return json(200, { granted: true });
+}
+
+async function setSubscription(subId: string, fields: Record<string, unknown>) {
+  await db(`memberships?subscription_id=eq.${encodeURIComponent(subId)}`, {
+    method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify(fields),
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json(405, { error: "POST only" });
 
@@ -81,6 +115,39 @@ Deno.serve(async (req) => {
     const type = event.event_type;
     const res = event.resource || {};
 
+    // ── Monthly subscriptions ──────────────────────────
+    if (type === "BILLING.SUBSCRIPTION.ACTIVATED" || type === "BILLING.SUBSCRIPTION.RE-ACTIVATED") {
+      return await grantSubscription(res);
+    }
+    if (type === "PAYMENT.SALE.COMPLETED") {
+      // Each monthly charge (including the first $9.99) arrives as a sale on the subscription
+      if (!res.billing_agreement_id) return json(200, { ignored: "not a subscription payment" });
+      const sub = await paypalGet(token, `/v1/billing/subscriptions/${res.billing_agreement_id}`);
+      return await grantSubscription(sub);
+    }
+    if (type === "BILLING.SUBSCRIPTION.CANCELLED") {
+      // Keep access until the end of the month they already paid for
+      await setSubscription(res.id, { status: "cancelled" });
+      console.log(`Subscription ${res.id} cancelled; access continues until paid_until`);
+      return json(200, { cancelled: true });
+    }
+    if (type === "BILLING.SUBSCRIPTION.SUSPENDED" || type === "BILLING.SUBSCRIPTION.EXPIRED") {
+      await setSubscription(res.id, { status: type.split(".").pop()!.toLowerCase(), paid_until: iso(new Date()) });
+      console.log(`Subscription ${res.id} ${type}; access ended`);
+      return json(200, { ended: true });
+    }
+    if (type === "PAYMENT.SALE.REFUNDED" || type === "PAYMENT.SALE.REVERSED") {
+      const saleId = type === "PAYMENT.SALE.REVERSED" ? res.id : res.sale_id;
+      if (!saleId) return json(200, { ignored: "no sale id" });
+      const sale = await paypalGet(token, `/v1/payments/sale/${saleId}`);
+      if (sale.billing_agreement_id) {
+        await setSubscription(sale.billing_agreement_id, { status: "refunded", paid_until: iso(new Date()) });
+        console.log(`Subscription ${sale.billing_agreement_id} refunded; access ended`);
+      }
+      return json(200, { revoked: true });
+    }
+
+    // ── One-time payments ──────────────────────────────
     if (type === "PAYMENT.CAPTURE.COMPLETED") {
       const amount = Number(res.amount?.value || 0);
       if (amount + 0.001 < EXPECTED) {

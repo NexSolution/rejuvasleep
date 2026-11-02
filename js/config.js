@@ -2,15 +2,17 @@
 // RejuvaSleep settings — edit these, nothing else
 // ─────────────────────────────────────────────
 window.REJUVA_CONFIG = {
-  // Paste your PayPal payment link here (keep the quotes)
-  paypalLink: "https://www.paypal.com/ncp/payment/AQMMDT5WSD73E",   // backup only
-
   // PayPal checkout button (public Client ID from your RejuvaSleep PayPal app)
   paypalClientId: "BAAJsh04g7GeCQy_46Id79gn9L9V2221fTawIO4BbwVCc6srBSGhX9cA4UGut9-3wVAKKeUBtL_2-utOm0",
 
-  price: "$19.99",          // what buyers pay
-  comparePrice: "$39.99",   // crossed-out "regular" price
-  priceNote: "One-time payment · lifetime access",
+  // Monthly subscription: create the plan in PayPal, then paste its Plan ID here (starts with P-)
+  paypalPlanId: "",
+  introPrice: "$9.99",      // first month
+  monthlyPrice: "$19.99",   // every month after
+
+  price: "$9.99",           // shown on the offer: first-month price
+  comparePrice: "$19.99",   // crossed out next to it
+  priceNote: "First month, then $19.99/month · cancel anytime",
 
   supportEmail: "rejuvasleep.help@gmail.com",  // the email customers can contact for help
 

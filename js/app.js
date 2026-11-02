@@ -30,11 +30,26 @@ function schedule() {
   return { wake: fromMin(wake), bed: fromMin(bed), winddown: fromMin(bed - 30), screensOff: fromMin(bed - 60), goal, water: Number(p.water_goal || 8) };
 }
 const quizAnswers = () => (S.profile && S.profile.quiz) || {};
+// Day 1 is the day they unlocked their membership (not the day they signed up)
 const programDay = () => {
-  const start = new Date((S.profile && S.profile.created_at) || Date.now()); start.setHours(0, 0, 0, 0);
+  const from = (S.membership && S.membership.created_at) || (S.profile && S.profile.created_at) || Date.now();
+  const start = new Date(from); start.setHours(0, 0, 0, 0);
   const now = new Date(); now.setHours(0, 0, 0, 0);
-  return Math.min(21, Math.max(1, Math.round((now - start) / 864e5) + 1));
+  return Math.max(1, Math.round((now - start) / 864e5) + 1);
 };
+// After the 21-day reset, a rotating weekly maintenance focus keeps the habits going
+const MAINTAIN = [
+  "Consistency check: same bedtime and wake time every night this week, weekends included.",
+  "Do your morning face ritual every day this week and notice the change in puffiness.",
+  "Screens-off challenge: no phone in the last hour before bed, 5 nights out of 7.",
+  "Hydration week: hit your water goal daily, with your last big glass before 7pm.",
+  "Evening gua sha 4 nights this week, then compare a morning photo to day 1.",
+  "Light week: 15 minutes of morning daylight every day, lights dimmed after sunset.",
+  "Reset week: retake the quiz from the Menu and see how your score has changed."
+];
+const todaysStep = day => day <= 21
+  ? { label: "21-day reset · today's step", text: RESET[day - 1] }
+  : { label: `Maintenance · week ${Math.floor((day - 22) / 7) + 1}`, text: MAINTAIN[Math.floor((day - 22) / 7) % MAINTAIN.length] };
 
 const RESET = [
   "Pick your wake-up time and set it in Plan. Keep it every day for 21 days.",
@@ -102,17 +117,19 @@ function weeklyTips() {
 async function load() {
   const since = daysAgo(27);
   const uid = S.user.id;
-  const [p, m, sl, w, r] = await Promise.all([
+  const [p, m, sl, w, r, ms] = await Promise.all([
     sb.from("profiles").select("*").eq("id", uid).maybeSingle(),
     sb.rpc("is_member"),
     sb.from("sleep_logs").select("*").gte("log_date", since).order("log_date"),
     sb.from("water_logs").select("*").gte("log_date", since).order("log_date"),
-    sb.from("ritual_logs").select("*").gte("log_date", since)
+    sb.from("ritual_logs").select("*").gte("log_date", since),
+    sb.from("memberships").select("plan,status,paid_until,created_at").maybeSingle()
   ]);
   if (p.error) throw p.error;
   S.profile = p.data || { id: uid, name: "", created_at: new Date().toISOString() };
   S.member = !!m.data;
   S.sleep = sl.data || []; S.water = w.data || []; S.rituals = r.data || [];
+  S.membership = ms.data || null;
 
   // Every new account answers the quiz after confirming their email, so never
   // reuse answers saved in this browser from an earlier visit or another account.
@@ -139,7 +156,10 @@ function renderMenu() {
   const items = S.member
     ? TABS.map(t => `<button role="menuitem" data-tab="${t.id}" class="${S.tab === t.id ? "on" : ""}"><span>${t.ic}</span>${t.label}</button>`).join("") + '<div class="sep"></div>'
     : "";
+  const manage = S.member && S.membership && S.membership.plan === "monthly"
+    ? `<a role="menuitem" href="https://www.paypal.com/myaccount/autopay/" target="_blank" rel="noopener"><span>💳</span>Manage or cancel subscription</a>` : "";
   $("menuList").innerHTML = `<p class="menu-email">Signed in as<br><strong>${esc(S.user.email)}</strong></p>` + items + `
+    ${manage}
     <a role="menuitem" href="quiz.html?onboard=1"><span>📝</span>Retake the quiz</a>
     <a role="menuitem" href="mailto:${esc(CFG.supportEmail || "")}"><span>✉️</span>Get help</a>
     <div class="sep"></div>
@@ -169,9 +189,9 @@ function render() {
   ({ today: renderToday, track: renderTrack, plan: renderPlan, rituals: renderRituals, learn: renderLearn })[S.tab]();
 }
 
-// ── Paywall: no access until paid ────────────────────
+// ── Paywall: no access until subscribed ──────────────
 let pollTimer;
-const priceValue = () => (String(CFG.price || "").match(/[\d.]+/) || ["19.99"])[0];
+const firstRenewal = () => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }); };
 
 function renderPaywall() {
   renderMenu();
@@ -185,14 +205,15 @@ function renderPaywall() {
       <li>Sleep and water tracker with wind-down reminders</li>
       <li>Step-by-step natural face rituals</li>
       <li>Article and video library</li>
-      <li>Weekly tips based on your tracking</li>
+      <li>New tips every week based on your tracking</li>
       <li>The Deep Sleep Blueprint PDF guide</li>
     </ul>
-    <p class="price" style="font-size:2rem;margin-bottom:4px"><s style="font-size:1rem;color:var(--muted);font-weight:500;margin-right:8px">${esc(CFG.comparePrice || "")}</s>${esc(CFG.price || "")}</p>
-    <p class="muted" style="font-size:.88rem;margin-bottom:18px">${esc(CFG.priceNote || "")}</p>
+    <p class="price" style="font-size:2rem;margin-bottom:4px"><s style="font-size:1rem;color:var(--muted);font-weight:500;margin-right:8px">${esc(CFG.monthlyPrice || "")}</s>${esc(CFG.introPrice || "")}<small style="font-size:1rem;color:var(--muted);font-weight:500"> first month</small></p>
+    <p class="muted" style="font-size:.9rem;margin-bottom:18px">Then ${esc(CFG.monthlyPrice || "")}/month. Cancel anytime.</p>
     <div id="paypalButtons" class="pp-wrap"><p class="muted" style="font-size:.9rem">Loading secure checkout…</p></div>
     <p class="form-msg" id="payMsg" role="status"></p>
-    <p class="fine">Pay with PayPal or a debit/credit card. Your plan unlocks on this page within a few seconds of paying. <button class="link-btn" id="recheck">Check now</button></p>
+    <p class="terms">You'll pay <strong>${esc(CFG.introPrice || "")} today</strong> for your first month. Your subscription then renews automatically at <strong>${esc(CFG.monthlyPrice || "")} every month</strong>, starting ${firstRenewal()}, until you cancel. Cancel anytime from your PayPal account or the Menu, and you keep access until the end of the month you've paid for.</p>
+    <p class="fine">Your plan unlocks on this page within a few seconds of subscribing. <button class="link-btn" id="recheck">Check now</button></p>
   </div>`;
   $("recheck").onclick = () => checkMembership(true);
   mountPayPal();
@@ -209,56 +230,44 @@ function loadPayPalSdk() {
   if (window.paypal) return Promise.resolve(window.paypal);
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(CFG.paypalClientId)}&currency=USD&intent=capture`;
+    s.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(CFG.paypalClientId)}&vault=true&intent=subscription`;
     s.onload = () => window.paypal ? resolve(window.paypal) : reject(new Error("PayPal didn't load"));
     s.onerror = () => reject(new Error("PayPal didn't load"));
     document.head.appendChild(s);
   });
 }
 
-function payFallback(reason) {
-  console.error(reason);
+function payUnavailable(reason) {
+  if (reason) console.error(reason);
   const box = $("paypalButtons"); if (!box) return;
-  box.innerHTML = CFG.paypalLink
-    ? `<a class="btn btn-gold full" href="${esc(CFG.paypalLink)}">Unlock my plan · ${esc(CFG.price || "")}</a>
-       <p class="fine">If your plan doesn't unlock within a few minutes of paying, email ${esc(CFG.supportEmail || "us")} and we'll unlock it for you.</p>`
-    : `<p class="muted">Checkout isn't available right now. Please try again shortly.</p>`;
+  box.innerHTML = `<button class="btn btn-gold full" disabled>Checkout opens soon</button>
+    <p class="fine">Questions? Email ${esc(CFG.supportEmail || "us")}.</p>`;
 }
 
 async function mountPayPal() {
-  if (!CFG.paypalClientId) return payFallback("no client id");
+  if (!CFG.paypalClientId || !CFG.paypalPlanId) return payUnavailable();
   let paypal;
-  try { paypal = await loadPayPalSdk(); } catch (e) { return payFallback(e); }
+  try { paypal = await loadPayPalSdk(); } catch (e) { return payUnavailable(e); }
   const box = $("paypalButtons"); if (!box) return;
   box.innerHTML = "";
   const msg = (t, ok) => { const el = $("payMsg"); if (el) { el.textContent = t; el.className = "form-msg" + (ok ? " ok" : ""); } };
   try {
     await paypal.Buttons({
-      style: { layout: "vertical", color: "gold", shape: "pill", label: "pay" },
-      createOrder: (data, actions) => actions.order.create({
-        purchase_units: [{
-          description: "RejuvaSleep membership (lifetime)",
-          custom_id: S.user.email.slice(0, 127),   // tells our webhook which account to unlock
-          amount: { currency_code: "USD", value: priceValue() }
-        }],
-        application_context: { shipping_preference: "NO_SHIPPING", brand_name: "RejuvaSleep" }
+      style: { layout: "vertical", color: "gold", shape: "pill", label: "subscribe" },
+      createSubscription: (data, actions) => actions.subscription.create({
+        plan_id: CFG.paypalPlanId,
+        custom_id: S.user.email.slice(0, 127),   // tells our webhook which account to unlock
+        application_context: { shipping_preference: "NO_SHIPPING", brand_name: "RejuvaSleep", user_action: "SUBSCRIBE_NOW" }
       }),
-      onApprove: async (data, actions) => {
-        msg("Payment approved — finishing up…", true);
-        try {
-          await actions.order.capture();
-          msg("Payment received! Unlocking your plan…", true);
-          startPolling(3000, 60);
-          checkMembership(false);
-        } catch (e) {
-          console.error(e);
-          msg("PayPal couldn't complete the payment. You haven't been charged — please try again.");
-        }
+      onApprove: () => {
+        msg("Subscription started! Unlocking your plan…", true);
+        startPolling(3000, 60);
+        checkMembership(false);
       },
-      onCancel: () => msg("Payment cancelled. You haven't been charged."),
+      onCancel: () => msg("Checkout cancelled. You haven't been charged."),
       onError: e => { console.error(e); msg("Something went wrong with PayPal. Please try again, or use a different card."); }
     }).render("#paypalButtons");
-  } catch (e) { payFallback(e); }
+  } catch (e) { payUnavailable(e); }
 }
 
 async function checkMembership(manual) {
@@ -266,6 +275,8 @@ async function checkMembership(manual) {
   if (data) {
     clearInterval(pollTimer);
     S.member = true;
+    const { data: row } = await sb.from("memberships").select("plan,status,paid_until,created_at").maybeSingle();
+    S.membership = row || S.membership;
     toast("Payment received. Welcome to RejuvaSleep!");
     go("today");
   } else if (manual) {
@@ -285,7 +296,11 @@ function renderToday() {
   const rit = myRituals();
   const doneToday = new Set(S.rituals.filter(r => r.log_date === today()).map(r => r.ritual));
 
+  const ms = S.membership;
+  const endNote = ms && ms.plan === "monthly" && ms.status === "cancelled" && ms.paid_until
+    ? `<div class="card" style="border-color:var(--gold)"><p><strong>Your subscription is cancelled.</strong> You have full access until ${new Date(ms.paid_until).toLocaleDateString(undefined, { month: "long", day: "numeric" })}.</p></div>` : "";
   view.innerHTML = `<div class="stack">
+    ${endNote}
     <div class="card hello">
       <h3>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, ${name}</h3>
       <p>Tonight's wind-down starts at <strong>${nice(sc.winddown)}</strong>. Lights out by <strong>${nice(sc.bed)}</strong>.</p>
@@ -308,7 +323,7 @@ function renderToday() {
 
     <div class="card"><div class="task">
       <div class="day"><small>DAY</small>${day}</div>
-      <div><p class="label">21-day reset · today's step</p><h4>${esc(RESET[day - 1])}</h4>
+      <div><p class="label">${todaysStep(day).label}</p><h4>${esc(todaysStep(day).text)}</h4>
       <p class="muted" style="font-size:.9rem">Your rituals today: ${RITUAL_NAMES[rit.morning]}${doneToday.has(rit.morning) ? " ✓" : ""} in the morning, ${RITUAL_NAMES[rit.evening]}${doneToday.has(rit.evening) ? " ✓" : ""} at night.</p></div>
     </div></div>
 
@@ -480,13 +495,13 @@ function renderPlan() {
   </div>
 
   <div class="card" style="margin-top:16px">
-    <div class="spread"><h3>Your 21-day reset</h3><span class="pill">Day ${day} of 21</span></div>
+    <div class="spread"><h3>Your 21-day reset</h3><span class="pill">${day <= 21 ? `Day ${day} of 21` : "Completed ✓"}</span></div>
     <div class="weeks" style="margin-top:10px">
       <div class="week ${wk === 1 ? "now" : ""}"><b>Week 1 · Schedule</b>Same wake time daily, daylight in the morning, caffeine before noon, cool dark room.</div>
       <div class="week ${wk === 2 ? "now" : ""}"><b>Week 2 · Wind-down</b>Dim lights, phone out of the bedroom, the 30-minute routine and 4-7-8 breathing.</div>
       <div class="week ${wk === 3 ? "now" : ""}"><b>Week 3 · Skin</b>Morning and evening face rituals, hydration targets, silk pillowcase.</div>
     </div>
-    <p style="margin-top:14px"><strong>Today:</strong> ${esc(RESET[day - 1])}</p>
+    <p style="margin-top:14px"><strong>${day <= 21 ? "Today" : "This week's focus"}:</strong> ${esc(todaysStep(day).text)}</p>
   </div>`;
 
   $("planForm").onsubmit = async e => {
