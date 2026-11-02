@@ -131,64 +131,90 @@ async function loadLibrary() {
   S.library = data || [];
 }
 
-// ── Tabs ─────────────────────────────────────────────
+// ── Menu ─────────────────────────────────────────────
 const TABS = [
-  { id: "today", label: "Today", free: true },
-  { id: "track", label: "Track", free: true },
-  { id: "plan", label: "My plan" },
-  { id: "rituals", label: "Face rituals" },
-  { id: "learn", label: "Learn" }
+  { id: "today", label: "Today", ic: "🌙" },
+  { id: "track", label: "Track sleep & water", ic: "📊" },
+  { id: "plan", label: "My plan & reminders", ic: "🗓️" },
+  { id: "rituals", label: "Face rituals", ic: "🧊" },
+  { id: "learn", label: "Learn", ic: "📚" }
 ];
 
-function renderTabs() {
-  $("tabs").innerHTML = TABS.map(t => `<button data-tab="${t.id}" class="${S.tab === t.id ? "on" : ""}">${t.label}${!t.free && !S.member ? '<span class="lock" aria-label="members only">🔒</span>' : ""}</button>`).join("");
-  $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => go(b.dataset.tab));
+function renderMenu() {
+  const items = S.member
+    ? TABS.map(t => `<button role="menuitem" data-tab="${t.id}" class="${S.tab === t.id ? "on" : ""}"><span>${t.ic}</span>${t.label}</button>`).join("") + '<div class="sep"></div>'
+    : "";
+  $("menuList").innerHTML = `<p class="menu-email">Signed in as<br><strong>${esc(S.user.email)}</strong></p>` + items + `
+    <a role="menuitem" href="quiz.html?onboard=1"><span>📝</span>Retake the quiz</a>
+    <a role="menuitem" href="mailto:${esc(CFG.supportEmail || "")}"><span>✉️</span>Get help</a>
+    <div class="sep"></div>
+    <button role="menuitem" id="logoutBtn" class="danger"><span>↩</span>Log out</button>`;
+  $("menuList").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { closeMenu(); go(b.dataset.tab); });
+  $("logoutBtn").onclick = async () => { await sb.auth.signOut(); location.replace("login.html?mode=login"); };
 }
+function closeMenu() { $("menuList").hidden = true; $("menuBtn").setAttribute("aria-expanded", "false"); }
+$("menuBtn").onclick = e => {
+  e.stopPropagation();
+  const open = $("menuList").hidden;
+  $("menuList").hidden = !open; $("menuBtn").setAttribute("aria-expanded", String(open));
+};
+document.addEventListener("click", e => { if (!$("menuWrap").contains(e.target)) closeMenu(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
 
 async function go(tab, open = null) {
   S.tab = tab; S.open = open;
   history.replaceState(null, "", "#" + tab);
-  renderTabs();
-  if ((tab === "rituals" || tab === "learn") && S.member && !S.library) { view.innerHTML = '<p class="loading">Loading…</p>'; await loadLibrary(); }
+  renderMenu();
+  if ((tab === "rituals" || tab === "learn") && !S.library) { view.innerHTML = '<p class="loading">Loading…</p>'; await loadLibrary(); }
   render();
   window.scrollTo(0, 0);
 }
 
 function render() {
-  const t = TABS.find(x => x.id === S.tab);
-  if (t && !t.free && !S.member) { view.innerHTML = lockedView(t.label); bindLocked(); return; }
   ({ today: renderToday, track: renderTrack, plan: renderPlan, rituals: renderRituals, learn: renderLearn })[S.tab]();
 }
 
-// ── Locked / upgrade ─────────────────────────────────
-function upgradeButton(label = "Unlock my full plan") {
-  return CFG.paypalLink
-    ? `<a class="btn btn-gold" href="${esc(CFG.paypalLink)}">${label} · ${esc(CFG.price || "")}</a>`
-    : `<button class="btn btn-gold" disabled>Checkout opens soon</button>`;
-}
-function lockedView(name) {
-  return `<div class="card locked">
-    <div class="ic">🔒</div>
-    <h3>${esc(name)} is for members</h3>
-    <p class="muted">Unlock everything built from your quiz answers.</p>
+// ── Paywall: no access until paid ────────────────────
+let pollTimer;
+function renderPaywall() {
+  renderMenu();
+  const p = S.profile, name = p.name ? esc(p.name) : "there";
+  const pay = CFG.paypalLink
+    ? `<a class="btn btn-gold full" href="${esc(CFG.paypalLink)}">Unlock my plan · ${esc(CFG.price || "")}</a>`
+    : `<button class="btn btn-gold full" disabled>Checkout opens soon</button>`;
+  view.innerHTML = `<div class="card locked" style="max-width:560px;margin:0 auto">
+    <div class="ic">🌙</div>
+    <h3>${name === "there" ? "Your" : name + ", your"} plan is ready</h3>
+    ${p.quiz_score != null ? `<p class="muted">Your Sleep Aging Score: <strong>${p.quiz_score}/100</strong>. Unlock your plan to start fixing it tonight.</p>` : '<p class="muted">Unlock your plan to start tonight.</p>'}
     <ul>
       <li>Your personal sleep schedule and 21-day reset</li>
-      <li>Wind-down and morning reminders</li>
-      <li>Step-by-step face rituals</li>
+      <li>Sleep and water tracker with wind-down reminders</li>
+      <li>Step-by-step natural face rituals</li>
       <li>Article and video library</li>
-      <li>Full weekly tips from your tracking</li>
-    </ul><br>
-    ${upgradeButton()}
-    <p class="fine">Already paid? Your account email must match your PayPal email. <button class="link-btn" id="recheck">Check again</button></p>
+      <li>Weekly tips based on your tracking</li>
+      <li>The Deep Sleep Blueprint PDF guide</li>
+    </ul>
+    <p class="price" style="font-size:2rem;margin-bottom:4px"><s style="font-size:1rem;color:var(--muted);font-weight:500;margin-right:8px">${esc(CFG.comparePrice || "")}</s>${esc(CFG.price || "")}</p>
+    <p class="muted" style="font-size:.88rem;margin-bottom:18px">${esc(CFG.priceNote || "")}</p>
+    ${pay}
+    <p class="fine">Pay with <strong>${esc(S.user.email)}</strong> on PayPal so your account unlocks automatically. This page updates by itself once your payment comes through. <button class="link-btn" id="recheck">Check now</button></p>
   </div>`;
+  $("recheck").onclick = () => checkMembership(true);
+  clearInterval(pollTimer);
+  let tries = 0;
+  pollTimer = setInterval(() => { if (++tries > 40) clearInterval(pollTimer); checkMembership(false); }, 8000);
 }
-function bindLocked() {
-  const b = $("recheck"); if (!b) return;
-  b.onclick = async () => {
-    const { data } = await sb.rpc("is_member");
-    if (data) { S.member = true; toast("You're in! Welcome to RejuvaSleep."); renderTabs(); render(); }
-    else toast(`No membership found for ${S.user.email} yet.`);
-  };
+
+async function checkMembership(manual) {
+  const { data } = await sb.rpc("is_member");
+  if (data) {
+    clearInterval(pollTimer);
+    S.member = true;
+    toast("Payment received. Welcome to RejuvaSleep!");
+    go("today");
+  } else if (manual) {
+    toast(`No payment found for ${S.user.email} yet. It can take a minute.`);
+  }
 }
 
 // ── TODAY ────────────────────────────────────────────
@@ -198,7 +224,7 @@ function renderToday() {
   const lastNight = S.sleep.find(r => r.log_date === today());
   const water = S.water.find(r => r.log_date === today());
   const tips = weeklyTips();
-  const shown = S.member ? tips : tips.slice(0, 1);
+  const shown = tips;
   const day = programDay();
   const rit = myRituals();
   const doneToday = new Set(S.rituals.filter(r => r.log_date === today()).map(r => r.ritual));
@@ -206,7 +232,7 @@ function renderToday() {
   view.innerHTML = `<div class="stack">
     <div class="card hello">
       <h3>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, ${name}</h3>
-      <p>${S.member ? `Tonight's wind-down starts at <strong>${nice(sc.winddown)}</strong>. Lights out by <strong>${nice(sc.bed)}</strong>.` : "Track your sleep for free, or unlock your full plan below."}</p>
+      <p>Tonight's wind-down starts at <strong>${nice(sc.winddown)}</strong>. Lights out by <strong>${nice(sc.bed)}</strong>.</p>
     </div>
 
     <div class="grid3">
@@ -224,17 +250,15 @@ function renderToday() {
       </div>
     </div>
 
-    ${S.member ? `
     <div class="card"><div class="task">
       <div class="day"><small>DAY</small>${day}</div>
       <div><p class="label">21-day reset · today's step</p><h4>${esc(RESET[day - 1])}</h4>
       <p class="muted" style="font-size:.9rem">Your rituals today: ${RITUAL_NAMES[rit.morning]}${doneToday.has(rit.morning) ? " ✓" : ""} in the morning, ${RITUAL_NAMES[rit.evening]}${doneToday.has(rit.evening) ? " ✓" : ""} at night.</p></div>
-    </div></div>` : ""}
+    </div></div>
 
     <div class="card">
-      <div class="spread"><h3>Your tips this week</h3>${S.member ? "" : '<span class="pill">1 of ' + Math.max(tips.length, 3) + "</span>"}</div>
+      <h3>Your tips this week</h3>
       ${shown.map(t => `<div class="tip"><div class="ic">${t.ic}</div><div><h4>${esc(t.t)}</h4><p class="muted" style="font-size:.92rem">${esc(t.d)}</p></div></div>`).join("") || '<p class="muted">Log a few nights to get your first tips.</p>'}
-      ${S.member ? "" : `<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line)"><p class="muted" style="margin-bottom:12px">Members get every tip, updated weekly from their tracking.</p>${upgradeButton()}</div>`}
     </div>
   </div>`;
   view.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
@@ -514,15 +538,18 @@ function renderLearn() {
 }
 
 // ── Start ────────────────────────────────────────────
-$("logout").onclick = async () => { await sb.auth.signOut(); location.replace("login.html?mode=login"); };
-
 (async () => {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return location.replace("login.html?mode=login");
   S.user = session.user;
-  $("whoEmail").textContent = S.user.email;
   try { await load(); }
   catch (e) { view.innerHTML = `<div class="card"><h3>We couldn't load your account</h3><p class="muted">${esc(friendlyError(e))}</p><button class="btn btn-purple btn-sm" onclick="location.reload()" style="margin-top:12px">Try again</button></div>`; return; }
+
+  // Step 1: the quiz personalises everything, so it comes first
+  if (!S.profile.quiz) return location.replace("quiz.html?onboard=1");
+  // Step 2: no access until paid
+  if (!S.member) return renderPaywall();
+
   const want = location.hash.slice(1);
   scheduleBrowserReminder();
   go(TABS.some(t => t.id === want) ? want : "today");

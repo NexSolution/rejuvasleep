@@ -6,8 +6,8 @@
 <title>Log in — RejuvaSleep</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=3">
-<link rel="stylesheet" href="css/app.css?v=3">
+<link rel="stylesheet" href="css/style.css?v=5">
+<link rel="stylesheet" href="css/app.css?v=5">
 </head>
 <body class="quiz-body">
   <div class="narrow">
@@ -19,8 +19,8 @@
         <button role="tab" data-mode="login">Log in</button>
       </div>
 
-      <h1 id="title">Save your plan</h1>
-      <p class="muted" id="subtitle">Create a free account to keep your quiz results and start tracking your sleep.</p>
+      <h1 id="title">Create your account</h1>
+      <p class="muted" id="subtitle">Create your account, then answer a few questions so we can build your personal plan.</p>
 
       <form id="form" novalidate>
         <label id="nameRow">First name
@@ -38,11 +38,11 @@
       </form>
 
       <button class="link-btn" id="forgot" hidden>Forgot your password?</button>
-      <p class="fine">If you bought RejuvaSleep, use the <strong>same email you paid with on PayPal</strong> so your membership unlocks automatically. Need help? <a href="mailto:rejuvasleep.help@gmail.com" style="color:var(--purple)">rejuvasleep.help@gmail.com</a></p>
+      <p class="fine">Use the <strong>same email you'll pay with on PayPal</strong> so your plan unlocks automatically. Need help? <a href="mailto:rejuvasleep.help@gmail.com" style="color:var(--purple)">rejuvasleep.help@gmail.com</a></p>
     </div>
   </div>
 
-<script src="js/config.js?v=4"></script>
+<script src="js/config.js?v=5"></script>
 <script type="module">
 import { sb, siteBase, readLocalQuiz, friendlyError } from "./js/supa.js";
 
@@ -51,7 +51,7 @@ const params = new URLSearchParams(location.search);
 let mode = params.get("mode") === "login" ? "login" : "signup";
 
 const COPY = {
-  signup: { title: "Save your plan", sub: "Create a free account to keep your quiz results and start tracking your sleep.", btn: "Create my account" },
+  signup: { title: "Save your plan", sub: "Create your account, then answer a few questions so we can build your personal plan.", btn: "Create my account" },
   login:  { title: "Welcome back", sub: "Log in to see your plan, tracker and rituals.", btn: "Log in" },
   forgot: { title: "Reset your password", sub: "Enter your email and we'll send you a link to set a new one.", btn: "Send reset link" },
   reset:  { title: "Set a new password", sub: "Choose a new password for your account.", btn: "Save new password" }

@@ -1,5 +1,6 @@
 (function () {
   const CFG = window.REJUVA_CONFIG || {};
+  const ONBOARD = new URLSearchParams(location.search).has("onboard");
 
   // ── Questions ─────────────────────────────────────
   // pts = how much this answer adds to the Sleep Aging Score
@@ -123,6 +124,8 @@
   const stepCount = document.getElementById("stepCount");
   const answers = {};
   let step = 0;
+  // Onboarding (logged in, after confirming email): name is already on the account
+  if (ONBOARD && QUESTIONS[0].id === "name") QUESTIONS.shift();
 
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -259,8 +262,16 @@
       ? r.triggers.map(t => `<div class="trigger"><div class="ic">${t.ic}</div><div><h4>${t.title}</h4><p>${t.why}</p><p class="fix">Fix: ${t.fix}</p></div></div>`).join("")
       : `<p style="color:var(--muted)">No major triggers — your plan will focus on maintaining your results and boosting glow.</p>`;
 
+    // Logged-in members finishing onboarding go straight to payment.
+    // Visitors who took the quiz from the landing page create their account first.
     const link = CFG.paypalLink || "";
-    const buyAttrs = link ? `href="${esc(link)}"` : `href="#" id="noLink"`;
+    const buyAttrs = ONBOARD
+      ? (link ? `href="${esc(link)}" id="payBtn"` : `href="#" id="noLink"`)
+      : `href="login.html"`;
+    const buyLabel = ONBOARD ? `Unlock my plan · ${esc(CFG.price || "")}` : "Create my account";
+    const buyNote = ONBOARD
+      ? "Secure checkout with PayPal or card. Pay with the same email as your account and your plan unlocks automatically."
+      : "Next: create your account, confirm your email, then unlock your plan.";
 
     app.innerHTML = `
       <div class="result-card">
@@ -311,14 +322,9 @@
         </ul>
         <div class="price"><s>${esc(CFG.comparePrice || "")}</s>${esc(CFG.price || "")}</div>
         <p style="color:var(--muted);font-size:.88rem;margin:6px 0 20px">${esc(CFG.priceNote || "")}</p>
-        <a class="btn btn-gold" style="width:100%" ${buyAttrs}>Get my plan</a>
-        <p style="text-align:center;font-size:.82rem;color:var(--muted);margin-top:12px">Secure checkout with PayPal or card</p>
-      </div>
-
-      <div class="result-card" style="text-align:center">
-        <h3 style="font-size:1.3rem;margin-bottom:6px">Not ready yet?</h3>
-        <p style="color:var(--muted);margin-bottom:16px">Save your results and start tracking your sleep with a free account.</p>
-        <a class="btn btn-purple" href="login.html">Save my results free</a>
+        <a class="btn btn-gold" style="width:100%" ${buyAttrs}>${buyLabel}</a>
+        <p style="text-align:center;font-size:.82rem;color:var(--muted);margin-top:12px">${buyNote}</p>
+        ${ONBOARD ? `<p style="text-align:center;margin-top:10px"><a href="app.html" style="color:var(--purple);font-weight:600;font-size:.9rem">Already paid? Go to my account</a></p>` : ""}
       </div>
 
       <p class="disclaimer">Your score is a habits-based estimate for education, not a medical assessment. Talk to a doctor about ongoing sleep problems.</p>`;
@@ -330,6 +336,22 @@
     const nl = document.getElementById("noLink");
     if (nl) nl.onclick = e => { e.preventDefault(); nl.textContent = "Checkout opens soon"; };
     window.scrollTo(0, 0);
+
+    if (ONBOARD) saveToAccount(r.score);
+  }
+
+  // Save answers to the logged-in user's profile so their plan is built from them
+  async function saveToAccount(score) {
+    const pay = document.getElementById("payBtn");
+    if (pay) pay.style.pointerEvents = "none";
+    try {
+      const { sb } = await import("./supa.js");
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) { location.replace("login.html?mode=login"); return; }
+      const { error } = await sb.from("profiles").update({ quiz: answers, quiz_score: score }).eq("id", session.user.id);
+      if (error) console.error(error);
+    } catch (e) { console.error(e); }
+    finally { if (pay) pay.style.pointerEvents = ""; }
   }
 
   render();

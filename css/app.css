@@ -119,3 +119,19 @@ form input:focus,form select:focus,form textarea:focus{outline:none;border-color
   .app-top .who span{display:none}
   .app-main h2{font-size:1.6rem}
 }
+
+/* ── Menu dropdown ──────────────────────────── */
+.menu-wrap{position:relative}
+.app-top .menu-btn{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);border:0;color:#fff;padding:9px 16px;border-radius:99px;font:600 .92rem 'Inter',sans-serif;cursor:pointer}
+.app-top .menu-btn:hover{background:rgba(255,255,255,.2)}
+.menu-list{position:absolute;right:0;top:calc(100% + 10px);width:270px;max-width:calc(100vw - 32px);background:#fff;border-radius:16px;box-shadow:0 18px 50px rgba(15,14,46,.25);padding:8px;z-index:60}
+.menu-list[hidden]{display:none}
+.menu-list button,.menu-list a{display:flex;align-items:center;gap:12px;width:100%;padding:12px 12px;border:0;background:none;border-radius:10px;font:500 .95rem 'Inter',sans-serif;color:var(--text);text-decoration:none;cursor:pointer;text-align:left}
+.menu-list button:hover,.menu-list a:hover{background:var(--pale)}
+.menu-list .on{background:var(--pale);color:var(--purple);font-weight:700}
+.menu-list span{width:22px;text-align:center}
+.menu-list .sep{height:1px;background:var(--line);margin:6px 4px}
+.menu-list .danger{color:#c92a2a}
+.menu-email{font-size:.8rem;color:var(--muted);padding:8px 12px 10px;border-bottom:1px solid var(--line);margin-bottom:6px;overflow-wrap:anywhere}
+.menu-email strong{color:var(--navy)}
+.toast:not(.show){visibility:hidden}
