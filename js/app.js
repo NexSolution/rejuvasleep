@@ -1,4 +1,4 @@
-import { sb, esc, readLocalQuiz, friendlyError } from "./supa.js";
+import { sb, esc, friendlyError } from "./supa.js";
 
 const CFG = window.REJUVA_CONFIG || {};
 const $ = id => document.getElementById(id);
@@ -114,14 +114,9 @@ async function load() {
   S.member = !!m.data;
   S.sleep = sl.data || []; S.water = w.data || []; S.rituals = r.data || [];
 
-  // First visit after the quiz: copy quiz answers into the profile
-  const local = readLocalQuiz();
-  if (local && local.answers && !S.profile.quiz) {
-    const upd = { quiz: local.answers, quiz_score: local.score };
-    if (!S.profile.name && local.answers.name) upd.name = local.answers.name;
-    const { error } = await sb.from("profiles").update(upd).eq("id", uid);
-    if (!error) Object.assign(S.profile, upd);
-  }
+  // Every new account answers the quiz after confirming their email, so never
+  // reuse answers saved in this browser from an earlier visit or another account.
+  try { localStorage.removeItem("rejuva_quiz"); } catch (e) {}
 }
 
 async function loadLibrary() {
