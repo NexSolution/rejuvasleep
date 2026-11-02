@@ -4,7 +4,7 @@ const CFG = window.REJUVA_CONFIG || {};
 const $ = id => document.getElementById(id);
 const view = $("view");
 
-const S = { user: null, profile: null, member: false, sleep: [], water: [], rituals: [], library: null, tab: "today", open: null };
+const S = { user: null, profile: null, member: false, sleep: [], water: [], rituals: [], checks: [], checkins: [], library: null, tab: "today", open: null, day: null, ci: null };
 
 // ── Dates & times ────────────────────────────────────
 const pad = n => String(n).padStart(2, "0");
@@ -31,12 +31,18 @@ function schedule() {
 }
 const quizAnswers = () => (S.profile && S.profile.quiz) || {};
 // Day 1 is the day they unlocked their membership (not the day they signed up)
-const programDay = () => {
-  const from = (S.membership && S.membership.created_at) || (S.profile && S.profile.created_at) || Date.now();
-  const start = new Date(from); start.setHours(0, 0, 0, 0);
-  const now = new Date(); now.setHours(0, 0, 0, 0);
-  return Math.max(1, Math.round((now - start) / 864e5) + 1);
+// A new round of the reset (after the day-21 check-in) restarts the count from program_start.
+const programStart = () => {
+  const p = S.profile || {};
+  return p.program_start ? new Date(p.program_start + "T00:00") : new Date((S.membership && S.membership.created_at) || p.created_at || Date.now());
 };
+const programDay = (dateStr = today()) => {
+  const start = programStart(); start.setHours(0, 0, 0, 0);
+  const d = new Date(dateStr + "T00:00");
+  return Math.round((d - start) / 864e5) + 1;   // can be < 1 for dates before the program started
+};
+const round = () => Number((S.profile && S.profile.program_round) || 1);
+const needsCheckin = () => programDay() > 21 && !S.checkins.some(c => c.round === round());
 // After the 21-day reset, a rotating weekly maintenance focus keeps the habits going
 const MAINTAIN = [
   "Consistency check: same bedtime and wake time every night this week, weekends included.",
@@ -117,19 +123,22 @@ function weeklyTips() {
 async function load() {
   const since = daysAgo(27);
   const uid = S.user.id;
-  const [p, m, sl, w, r, ms] = await Promise.all([
+  const [p, m, sl, w, r, ms, rc, ck] = await Promise.all([
     sb.from("profiles").select("*").eq("id", uid).maybeSingle(),
     sb.rpc("is_member"),
     sb.from("sleep_logs").select("*").gte("log_date", since).order("log_date"),
     sb.from("water_logs").select("*").gte("log_date", since).order("log_date"),
     sb.from("ritual_logs").select("*").gte("log_date", since),
-    sb.from("memberships").select("plan,status,paid_until,created_at").maybeSingle()
+    sb.from("memberships").select("plan,status,paid_until,created_at").maybeSingle(),
+    sb.from("routine_checks").select("log_date,item").gte("log_date", daysAgo(40)),
+    sb.from("checkins").select("*").order("round")
   ]);
   if (p.error) throw p.error;
   S.profile = p.data || { id: uid, name: "", created_at: new Date().toISOString() };
   S.member = !!m.data;
   S.sleep = sl.data || []; S.water = w.data || []; S.rituals = r.data || [];
   S.membership = ms.data || null;
+  S.checks = rc.data || []; S.checkins = ck.data || [];
 
   // Every new account answers the quiz after confirming their email, so never
   // reuse answers saved in this browser from an earlier visit or another account.
@@ -160,11 +169,15 @@ function renderMenu() {
     ? `<a role="menuitem" href="https://www.paypal.com/myaccount/autopay/" target="_blank" rel="noopener"><span>💳</span>Manage or cancel subscription</a>` : "";
   $("menuList").innerHTML = `<p class="menu-email">Signed in as<br><strong>${esc(S.user.email)}</strong></p>` + items + `
     ${manage}
-    <a role="menuitem" href="quiz.html?onboard=1"><span>📝</span>Retake the quiz</a>
+    <a role="menuitem" href="quiz.html?onboard=1${S.member ? "&retake=1" : ""}"><span>📝</span>Retake the quiz</a>
     <a role="menuitem" href="mailto:${esc(CFG.supportEmail || "")}"><span>✉️</span>Get help</a>
+    <div class="sep"></div>
+    <p class="menu-label">Text size</p>
+    <div class="size-row">${SIZES.map(([id, a, label], i) => `<button data-size="${id}" class="${document.documentElement.dataset.text === id ? "on" : ""}" aria-label="${label} text" style="font-size:${1 + i * 0.25}rem">${a}</button>`).join("")}</div>
     <div class="sep"></div>
     <button role="menuitem" id="logoutBtn" class="danger"><span>↩</span>Log out</button>`;
   $("menuList").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { closeMenu(); go(b.dataset.tab); });
+  $("menuList").querySelectorAll("[data-size]").forEach(b => b.onclick = e => { e.stopPropagation(); applyTextSize(b.dataset.size); renderMenu(); });
   $("logoutBtn").onclick = async () => { await sb.auth.signOut(); location.replace("login.html?mode=login"); };
 }
 function closeMenu() { $("menuList").hidden = true; $("menuBtn").setAttribute("aria-expanded", "false"); }
@@ -176,25 +189,61 @@ $("menuBtn").onclick = e => {
 document.addEventListener("click", e => { if (!$("menuWrap").contains(e.target)) closeMenu(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
 
-async function go(tab, open = null) {
+async function go(tab, open = null, { push = true } = {}) {
+  const same = S.tab === tab && S.open === open;
   S.tab = tab; S.open = open;
-  history.replaceState(null, "", "#" + tab);
-  renderMenu();
+  const url = "#" + tab + (open ? "/" + open : "");
+  if (push && !same) history.pushState({ tab, open }, "", url);
+  else history.replaceState({ tab, open }, "", url);
+  stopPlayer();
+  renderMenu(); renderNav();
   if ((tab === "rituals" || tab === "learn") && !S.library) { view.innerHTML = '<p class="loading">Loading…</p>'; await loadLibrary(); }
   render();
   window.scrollTo(0, 0);
 }
 
 function render() {
-  ({ today: renderToday, track: renderTrack, plan: renderPlan, rituals: renderRituals, learn: renderLearn })[S.tab]();
+  ({ today: renderToday, track: renderTrack, plan: renderPlan, rituals: renderRituals, learn: renderLearn, checkin: renderCheckin })[S.tab]();
 }
+
+// Phone back button: go to the previous screen inside the app instead of leaving it
+window.addEventListener("popstate", e => {
+  if (!$("menuList").hidden) { closeMenu(); }
+  const st = e.state;
+  if (!S.member) { history.pushState({ pay: true }, "", "#pay"); return; }
+  if (!st || st.root) {
+    // Already at the start: stay in the app on Today rather than exiting
+    history.pushState({ tab: "today", open: null }, "", "#today");
+    if (S.tab !== "today" || S.open) go("today", null, { push: false });
+    return;
+  }
+  go(st.tab, st.open || null, { push: false });
+});
+
+// Big bottom navigation, always visible for members
+const NAV = [["today", "🌙", "Today"], ["track", "📊", "Track"], ["rituals", "🧊", "Rituals"], ["plan", "🗓️", "My plan"], ["learn", "📚", "Learn"]];
+function renderNav() {
+  const nav = $("bottomNav");
+  if (!S.member) { nav.hidden = true; return; }
+  nav.hidden = false;
+  nav.innerHTML = NAV.map(([id, ic, label]) => `<button data-tab="${id}" class="${S.tab === id ? "on" : ""}" aria-current="${S.tab === id ? "page" : "false"}"><span class="ni">${ic}</span>${label}</button>`).join("");
+  nav.querySelectorAll("button").forEach(b => b.onclick = () => go(b.dataset.tab));
+}
+
+// Text size, remembered on this device
+const SIZES = [["normal", "A", "Normal"], ["large", "A", "Large"], ["xl", "A", "Extra large"]];
+function applyTextSize(sz) {
+  document.documentElement.dataset.text = sz;
+  try { localStorage.setItem("rejuva_text", sz); } catch (e) {}
+}
+try { applyTextSize(localStorage.getItem("rejuva_text") || "large"); } catch (e) { applyTextSize("large"); }
 
 // ── Paywall: no access until subscribed ──────────────
 let pollTimer;
 const firstRenewal = () => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }); };
 
 function renderPaywall() {
-  renderMenu();
+  renderMenu(); renderNav();
   const p = S.profile, name = p.name ? esc(p.name) : "there";
   view.innerHTML = `<div class="card locked" style="max-width:560px;margin:0 auto">
     <div class="ic">🌙</div>
@@ -284,55 +333,159 @@ async function checkMembership(manual) {
   }
 }
 
-// ── TODAY ────────────────────────────────────────────
+// ── TODAY: weekly calendar + tickable daily routine ──
+const weekStart = (dateStr) => { const d = new Date(dateStr + "T12:00"); const dow = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dow); return d; };
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const ROUND_FOCUS = {
+  missed: "Fewer, easier wins: tick at least your morning and evening ritual every day.",
+  schedule: "Anchor one thing: keep your wake-up time fixed, even on busy or shift days.",
+  asleep: "Wind-down first: start your evening routine 15 minutes earlier this round.",
+  waking: "Cool, dark and dry: room around 65°F / 18°C and no fluids in the last hour.",
+  skin: "Skin round: do your evening gua sha at least 5 nights a week.",
+  habits: "Repeat and lock in: same steps as round 1, aiming for 80% of ticks each week.",
+  happy: "Maintenance: keep what worked and try one new ritual each week."
+};
+
+function routineFor(date) {
+  const sc = schedule(), rit = myRituals(), day = programDay(date);
+  const water = (S.water.find(r => r.log_date === date) || {}).glasses || 0;
+  const slept = S.sleep.some(r => r.log_date === date);
+  const ritDone = slug => S.rituals.some(r => r.log_date === date && r.ritual === slug);
+  const step = day >= 1 ? todaysStep(day) : null;
+  const ritMin = slug => ((S.library || []).find(i => i.slug === slug) || {}).minutes;
+  return [
+    step && { sec: "Today's step", k: "step", t: step.text, sub: step.label },
+    { sec: "Morning", k: "wake", t: `Wake up at ${nice(sc.wake)}`, sub: "Same time every day, weekends too" },
+    { sec: "Morning", k: "water-am", t: "Drink a full glass of water", sub: "Before coffee or tea" },
+    { sec: "Morning", k: "light", t: "10 minutes of daylight", sub: "Step outside or sit by a bright window" },
+    { sec: "Morning", k: "ritual-am", t: RITUAL_NAMES[rit.morning], sub: "Guided face ritual" + (ritMin(rit.morning) ? ` · ${ritMin(rit.morning)} min` : ""), auto: ritDone(rit.morning), ritual: rit.morning, action: ["Start", "rituals", rit.morning + ":play"] },
+    { sec: "Morning", k: "log", t: "Log last night's sleep", sub: slept ? "Logged ✓" : "Takes 20 seconds", auto: slept, action: slept ? null : ["Log", "track"] },
+    { sec: "Daytime", k: "caffeine", t: "Last caffeine before noon", sub: "Coffee, tea, soda and energy drinks" },
+    { sec: "Daytime", k: "water-goal", t: `Drink ${sc.water} glasses of water`, sub: `${water} of ${sc.water} logged`, auto: water >= sc.water, action: water >= sc.water ? null : ["Add", "track"] },
+    { sec: "Daytime", k: "move", t: "Move for 20 minutes", sub: "A walk counts" },
+    { sec: "Evening", k: "screens", t: `Screens off at ${nice(sc.screensOff)}`, sub: "Dim the lights too" },
+    { sec: "Evening", k: "ritual-pm", t: RITUAL_NAMES[rit.evening], sub: `Start at ${nice(sc.winddown)}` + (ritMin(rit.evening) ? ` · ${ritMin(rit.evening)} min` : ""), auto: ritDone(rit.evening), ritual: rit.evening, action: ["Start", "rituals", rit.evening + ":play"] },
+    { sec: "Evening", k: "lights", t: `Lights out at ${nice(sc.bed)}`, sub: "4 rounds of 4-7-8 breathing in bed" }
+  ].filter(Boolean);
+}
+const isDone = (date, it) => it.auto || S.checks.some(c => c.log_date === date && c.item === it.k);
+const dayProgress = date => { const items = routineFor(date); return [items.filter(it => isDone(date, it)).length, items.length]; };
+
 function renderToday() {
   const p = S.profile, sc = schedule();
+  if (!S.day) S.day = today();
+  const sel = S.day, isToday = sel === today(), future = sel > today();
   const name = p.name ? esc(p.name) : "there";
+  const dToday = programDay();
+  const ws = weekStart(sel);
+  const days = Array.from({ length: 7 }, (_, i) => ymd(addDays(ws, i)));
+  const items = routineFor(sel);
+  const [done, total] = dayProgress(sel);
+  const selDay = programDay(sel);
   const lastNight = S.sleep.find(r => r.log_date === today());
-  const water = S.water.find(r => r.log_date === today());
   const tips = weeklyTips();
-  const shown = tips;
-  const day = programDay();
-  const rit = myRituals();
-  const doneToday = new Set(S.rituals.filter(r => r.log_date === today()).map(r => r.ritual));
+  const lastCheck = S.checkins.filter(c => c.choice === "continue").slice(-1)[0];
+  const focus = round() > 1 && lastCheck ? (lastCheck.reasons || []).map(r => ROUND_FOCUS[r]).filter(Boolean)[0] : null;
 
   const ms = S.membership;
   const endNote = ms && ms.plan === "monthly" && ms.status === "cancelled" && ms.paid_until
-    ? `<div class="card" style="border-color:var(--gold)"><p><strong>Your subscription is cancelled.</strong> You have full access until ${new Date(ms.paid_until).toLocaleDateString(undefined, { month: "long", day: "numeric" })}.</p></div>` : "";
+    ? `<div class="card notice"><p><strong>Your subscription is cancelled.</strong> You have full access until ${new Date(ms.paid_until).toLocaleDateString(undefined, { month: "long", day: "numeric" })}.</p></div>` : "";
+
+  const sections = ["Today's step", "Morning", "Daytime", "Evening"];
+  const row = it => {
+    const on = isDone(sel, it);
+    return `<div class="check-row ${on ? "on" : ""}">
+      <button class="tick" data-k="${it.k}" role="checkbox" aria-checked="${on}" ${future ? "disabled" : ""} aria-label="${esc(it.t)}"><span>✓</span></button>
+      <div class="ct"><p class="t">${esc(it.t)}</p><p class="s">${esc(it.sub || "")}</p></div>
+      ${it.action && !future && isToday ? `<button class="btn btn-ghost btn-sm act" data-act="${it.action[1]}" data-open="${esc(it.action[2] || "")}">${it.action[0]}</button>` : ""}
+    </div>`;
+  };
+
   view.innerHTML = `<div class="stack">
     ${endNote}
+    ${needsCheckin() ? `<button class="card checkin-cta" id="ciBtn"><span class="big-ic">🎉</span><span><strong>You've completed your 21-day reset!</strong><br>Take your 2-minute check-in to see your progress and choose what's next.</span><span class="go">›</span></button>` : ""}
     <div class="card hello">
       <h3>Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, ${name}</h3>
-      <p>Tonight's wind-down starts at <strong>${nice(sc.winddown)}</strong>. Lights out by <strong>${nice(sc.bed)}</strong>.</p>
+      <p>${dToday >= 1 && dToday <= 21 ? `Day <strong>${dToday} of 21</strong>${round() > 1 ? ` · Round ${round()}` : ""}. ` : ""}Wind-down at <strong>${nice(sc.winddown)}</strong>, lights out by <strong>${nice(sc.bed)}</strong>.</p>
+      ${focus ? `<p class="focus">Round ${round()} focus: ${esc(focus)}</p>` : ""}
     </div>
 
-    <div class="grid3">
+    <div class="card week-card">
+      <div class="spread week-head">
+        <button class="nav-arrow" id="wkPrev" aria-label="Previous week">‹</button>
+        <h3>${ws.toLocaleDateString(undefined, { month: "long", day: "numeric" })} – ${addDays(ws, 6).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</h3>
+        <button class="nav-arrow" id="wkNext" aria-label="Next week">›</button>
+      </div>
+      <div class="week">${days.map(d => {
+        const [a, b] = dayProgress(d), pd = programDay(d);
+        const dt = new Date(d + "T12:00");
+        const cls = [d === sel ? "sel" : "", d === today() ? "today" : "", d > today() ? "future" : "", a === b ? "full" : ""].join(" ");
+        return `<button class="wd ${cls}" data-day="${d}" aria-pressed="${d === sel}" aria-label="${dt.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}">
+          <span class="dn">${dt.toLocaleDateString(undefined, { weekday: "short" })}</span>
+          <span class="dd">${dt.getDate()}</span>
+          <span class="dp">${d > today() ? (pd >= 1 && pd <= 21 ? "Day " + pd : "") : `${a}/${b}`}</span>
+        </button>`;
+      }).join("")}</div>
+      ${!isToday ? `<button class="link-btn" id="backToday" style="margin-top:12px">← Back to today</button>` : ""}
+    </div>
+
+    <div class="card routine">
+      <div class="spread">
+        <div><p class="label">${isToday ? "Today" : future ? "Coming up" : "Past day"}${selDay >= 1 && selDay <= 21 ? ` · Day ${selDay} of 21` : ""}</p>
+        <h3>${new Date(sel + "T12:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h3></div>
+        <div class="ring" style="--p:${Math.round(done / total * 100)}"><b>${done}/${total}</b></div>
+      </div>
+      ${future ? `<p class="muted" style="margin:6px 0 4px">Here's what's planned. You can tick these off on the day.</p>` : ""}
+      ${sections.map(sec => {
+        const list = items.filter(it => it.sec === sec);
+        return list.length ? `<p class="sec-title">${sec === "Morning" ? "☀️" : sec === "Daytime" ? "🌤️" : sec === "Evening" ? "🌙" : "⭐"} ${sec}</p>${list.map(row).join("")}` : "";
+      }).join("")}
+      ${done === total && !future ? `<p class="all-done">✨ Everything done${isToday ? " today" : ""}. Beautiful work.</p>` : ""}
+    </div>
+
+    <div class="grid2">
       <div class="card"><p class="label">Last night</p>
         ${lastNight ? `<p class="big">${Number(lastNight.hours).toFixed(1)}<small> hrs</small></p><p class="muted">${nice(lastNight.bedtime)} → ${nice(lastNight.wake_time)}</p>`
                     : `<p class="muted" style="margin:6px 0 12px">Not logged yet</p><button class="btn btn-purple btn-sm" data-go="track">Log last night</button>`}
       </div>
-      <div class="card"><p class="label">Water today</p>
-        <p class="big">${water ? water.glasses : 0}<small> / ${sc.water} glasses</small></p>
-        <button class="btn btn-ghost btn-sm" data-go="track" style="margin-top:10px">Add water</button>
-      </div>
       <div class="card"><p class="label">Sleep Aging Score</p>
-        ${p.quiz_score != null ? `<p class="big">${p.quiz_score}<small> / 100</small></p><p class="muted">From your quiz. Retake it in a few weeks to compare.</p>`
-                               : `<p class="muted" style="margin:6px 0 12px">Take the quiz to get your score and personalise your plan.</p><a class="btn btn-ghost btn-sm" href="quiz.html">Take the quiz</a>`}
+        <p class="big">${p.quiz_score ?? "–"}<small> / 100</small></p>
+        ${p.prev_quiz_score != null && p.quiz_score != null ? `<p class="muted">${p.prev_quiz_score > p.quiz_score ? `Down ${p.prev_quiz_score - p.quiz_score} from ${p.prev_quiz_score} — lower is better ✓` : `Was ${p.prev_quiz_score} last time`}</p>` : `<p class="muted">Lower is better.</p>`}
       </div>
     </div>
-
-    <div class="card"><div class="task">
-      <div class="day"><small>DAY</small>${day}</div>
-      <div><p class="label">${todaysStep(day).label}</p><h4>${esc(todaysStep(day).text)}</h4>
-      <p class="muted" style="font-size:.9rem">Your rituals today: ${RITUAL_NAMES[rit.morning]}${doneToday.has(rit.morning) ? " ✓" : ""} in the morning, ${RITUAL_NAMES[rit.evening]}${doneToday.has(rit.evening) ? " ✓" : ""} at night.</p></div>
-    </div></div>
 
     <div class="card">
       <h3>Your tips this week</h3>
-      ${shown.map(t => `<div class="tip"><div class="ic">${t.ic}</div><div><h4>${esc(t.t)}</h4><p class="muted" style="font-size:.92rem">${esc(t.d)}</p></div></div>`).join("") || '<p class="muted">Log a few nights to get your first tips.</p>'}
+      ${tips.map(t => `<div class="tip"><div class="ic">${t.ic}</div><div><h4>${esc(t.t)}</h4><p class="muted" style="font-size:.95rem">${esc(t.d)}</p></div></div>`).join("") || '<p class="muted">Log a few nights to get your first tips.</p>'}
     </div>
   </div>`;
+
   view.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
+  view.querySelectorAll(".wd").forEach(b => b.onclick = () => { S.day = b.dataset.day; renderToday(); });
+  $("wkPrev").onclick = () => { S.day = ymd(addDays(new Date(sel + "T12:00"), -7)); renderToday(); };
+  $("wkNext").onclick = () => { S.day = ymd(addDays(new Date(sel + "T12:00"), 7)); renderToday(); };
+  if ($("backToday")) $("backToday").onclick = () => { S.day = today(); renderToday(); };
+  if ($("ciBtn")) $("ciBtn").onclick = () => go("checkin");
+  view.querySelectorAll(".act").forEach(b => b.onclick = () => go(b.dataset.act, b.dataset.open || null));
+  view.querySelectorAll(".tick").forEach(b => b.onclick = () => toggleCheck(sel, items.find(it => it.k === b.dataset.k)));
+}
+
+async function toggleCheck(date, it) {
+  if (!it || date > today()) return;
+  if (it.ritual) { await toggleRitual(it.ritual, date); return renderToday(); }
+  if (it.auto) { toast(it.k === "log" ? "Edit your sleep log on the Track page." : "This ticks itself from your water log."); return; }
+  const on = S.checks.some(c => c.log_date === date && c.item === it.k);
+  if (on) {
+    S.checks = S.checks.filter(c => !(c.log_date === date && c.item === it.k)); renderToday();
+    const { error } = await sb.from("routine_checks").delete().eq("log_date", date).eq("item", it.k);
+    if (error) { toast(friendlyError(error)); S.checks.push({ log_date: date, item: it.k }); renderToday(); }
+  } else {
+    S.checks.push({ log_date: date, item: it.k }); renderToday();
+    const { error } = await sb.from("routine_checks").insert({ user_id: S.user.id, log_date: date, item: it.k });
+    if (error && !/duplicate/i.test(error.message)) { toast(friendlyError(error)); S.checks = S.checks.filter(c => !(c.log_date === date && c.item === it.k)); renderToday(); return; }
+    const [a, b] = dayProgress(date);
+    if (a === b) toast("✨ Every step done. Beautiful work!");
+  }
 }
 
 // ── TRACK ────────────────────────────────────────────
@@ -547,19 +700,21 @@ function readerView(item) {
     <div class="card"><p class="label">${isRitual ? `${item.minutes || ""} min · ${esc(item.time_of_day || "anytime")}` : item.kind === "video" ? "Video" : `${item.minutes || 3} min read`}</p>
     <h2>${esc(item.title)}</h2><p class="muted">${esc(item.summary)}</p>
     ${yt ? `<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${yt}" title="${esc(item.title)}" allowfullscreen loading="lazy"></iframe></div>` : ""}
+    ${isRitual && Array.isArray(item.steps) && item.steps.length ? `<button class="btn btn-gold full big-btn" id="playBtn" style="margin:18px 0 6px">▶ Start guided routine <small>(${item.steps.length} steps)</small></button>` : ""}
     <div class="body">${item.body || ""}</div>
     ${isRitual ? `<button class="btn ${done ? "btn-ghost" : "btn-purple"} full" id="doneBtn" style="margin-top:18px">${done ? "✓ Done today (tap to undo)" : "Mark as done today"}</button>` : ""}
     </div></div>`;
 }
 
-async function toggleRitual(slug) {
-  const done = S.rituals.some(r => r.log_date === today() && r.ritual === slug);
+async function toggleRitual(slug, date = today(), force) {
+  const done = S.rituals.some(r => r.log_date === date && r.ritual === slug);
+  if (force === true && done) return;
   if (done) {
-    const { error } = await sb.from("ritual_logs").delete().eq("log_date", today()).eq("ritual", slug);
+    const { error } = await sb.from("ritual_logs").delete().eq("log_date", date).eq("ritual", slug);
     if (error) return toast(friendlyError(error));
-    S.rituals = S.rituals.filter(r => !(r.log_date === today() && r.ritual === slug));
+    S.rituals = S.rituals.filter(r => !(r.log_date === date && r.ritual === slug));
   } else {
-    const row = { user_id: S.user.id, log_date: today(), ritual: slug };
+    const row = { user_id: S.user.id, log_date: date, ritual: slug };
     const { error } = await sb.from("ritual_logs").insert(row);
     if (error && !/duplicate/i.test(error.message)) return toast(friendlyError(error));
     S.rituals.push(row); toast("Ritual logged ✨");
@@ -572,11 +727,16 @@ function libraryEmpty() {
 
 function renderRituals() {
   const items = (S.library || []).filter(i => i.kind === "ritual");
+  if (S.open && S.open.endsWith(":play")) {
+    const item = items.find(i => i.slug === S.open.slice(0, -5));
+    if (item && item.steps) return renderPlayer(item);
+  }
   if (S.open) {
     const item = items.find(i => i.slug === S.open);
     if (item) {
       view.innerHTML = readerView(item);
-      $("back").onclick = () => go("rituals");
+      $("back").onclick = () => history.back();
+      if ($("playBtn")) $("playBtn").onclick = () => go("rituals", item.slug + ":play");
       $("doneBtn").onclick = async () => { await toggleRitual(item.slug); renderRituals(); };
       return;
     }
@@ -598,7 +758,7 @@ function renderLearn() {
   const items = (S.library || []).filter(i => i.kind !== "ritual");
   if (S.open) {
     const item = items.find(i => i.slug === S.open);
-    if (item) { view.innerHTML = readerView(item); $("back").onclick = () => go("learn"); return; }
+    if (item) { view.innerHTML = readerView(item); $("back").onclick = () => history.back(); return; }
   }
   const videos = items.filter(i => i.kind === "video"), articles = items.filter(i => i.kind === "article");
   const card = i => `<button class="card r-card" data-open="${esc(i.slug)}"><h4>${i.kind === "video" ? "▶ " : ""}${esc(i.title)}</h4><p class="muted" style="font-size:.9rem">${esc(i.summary)}</p><p class="meta">${i.kind === "video" ? "Video" : `${i.minutes || 3} min read`}</p></button>`;
@@ -606,6 +766,216 @@ function renderLearn() {
     ${videos.length ? `<h3 style="margin:10px 0 12px">Videos</h3><div class="grid3">${videos.map(card).join("")}</div>` : ""}
     ${articles.length ? `<h3 style="margin:22px 0 12px">Articles</h3><div class="grid3">${articles.map(card).join("")}</div>` : (videos.length ? "" : libraryEmpty())}`;
   view.querySelectorAll("[data-open]").forEach(b => b.onclick = () => go("learn", b.dataset.open));
+}
+
+// ── DAY 21 CHECK-IN ──────────────────────────────────
+const REASONS = [
+  ["missed", "I missed some days"],
+  ["schedule", "My schedule is unpredictable (work, kids, shifts)"],
+  ["asleep", "I still struggle to fall asleep"],
+  ["waking", "I still wake up during the night"],
+  ["skin", "I want to see more change in my skin"],
+  ["habits", "I need more time for the habits to stick"],
+  ["happy", "It was enough — I'm happy with my results"]
+];
+
+function programStats() {
+  const start = ymd(programStart());
+  const nights = S.sleep.filter(r => r.log_date >= start);
+  const rituals = S.rituals.filter(r => r.log_date >= start).length;
+  let ticked = 0, possible = 0;
+  for (let i = 0; i < 21; i++) {
+    const d = ymd(addDays(programStart(), i));
+    if (d > today()) break;
+    const [a, b] = dayProgress(d); ticked += a; possible += b;
+  }
+  return { nights: nights.length, avgH: avg(nights.map(r => Number(r.hours))), rituals, pct: possible ? Math.round(ticked / possible * 100) : 0 };
+}
+
+function renderCheckin() {
+  if (!S.ci) S.ci = { stage: "intro", reasons: [], note: "" };
+  const ci = S.ci, p = S.profile, st = programStats();
+  const already = S.checkins.find(c => c.round === round());
+  const back = `<button class="back-link" id="ciBack">← Back to Today</button>`;
+  let html = "";
+
+  if (already && ci.stage !== "finished") {
+    html = `<div class="card"><h3>Check-in done</h3><p class="muted">You've already completed the check-in for round ${round()}.</p></div>`;
+  } else if (ci.stage === "intro") {
+    const retook = p.prev_quiz_score != null && sessionStorage.getItem("rejuva_ci") === String(round());
+    html = `<div class="card ci-hero"><div class="big-ic">🎉</div><h2>You did it — 21 days!</h2>
+      <p class="muted">Here's what you put in over the last three weeks.</p>
+      <div class="ci-stats">
+        <div><b>${st.nights}</b><span>nights logged</span></div>
+        <div><b>${st.avgH ? st.avgH.toFixed(1) : "–"}</b><span>avg hours</span></div>
+        <div><b>${st.rituals}</b><span>face rituals</span></div>
+        <div><b>${st.pct}%</b><span>routine ticked</span></div>
+      </div></div>
+      ${retook ? `<div class="card score-compare"><p class="label">Your Sleep Aging Score</p>
+        <div class="row" style="gap:18px;align-items:baseline"><span class="big muted-num">${p.prev_quiz_score}</span><span class="arrow">→</span><span class="big">${p.quiz_score}</span></div>
+        <p class="muted">${p.quiz_score < p.prev_quiz_score ? `Down ${p.prev_quiz_score - p.quiz_score} points. Lower is better — your habits are working.` : p.quiz_score === p.prev_quiz_score ? "The same as before. Another round can help the habits take hold." : `Up ${p.quiz_score - p.prev_quiz_score} points. Let's look at what got in the way.`}</p>
+        <button class="btn btn-purple full big-btn" id="ciNext">Continue</button></div>`
+      : `<div class="card"><h3>Step 1 · Retake the quiz</h3><p class="muted">The same questions as day 1, so you can see how much has changed. Takes about 2 minutes.</p>
+        <a class="btn btn-gold full big-btn" id="ciQuiz" href="quiz.html?onboard=1&checkin=1">Retake the quiz</a>
+        <button class="link-btn" id="ciSkip" style="margin-top:12px">Skip the quiz</button></div>`}`;
+  } else if (ci.stage === "why") {
+    html = `<div class="card"><p class="label">Step 2 of 3</p><h3>How did the 21 days go?</h3>
+      <p class="muted">Pick everything that fits. Your answers shape your next round.</p>
+      <div class="chips">${REASONS.map(([k, label]) => `<button class="chip ${ci.reasons.includes(k) ? "on" : ""}" data-r="${k}" aria-pressed="${ci.reasons.includes(k)}">${label}</button>`).join("")}</div>
+      <label class="note-label">Anything else? What would help you most? <span class="field-hint">(optional)</span>
+        <textarea id="ciNote" rows="3" maxlength="500" placeholder="e.g. I work night shifts, or I keep forgetting the evening ritual">${esc(ci.note)}</textarea></label>
+      <button class="btn btn-purple full big-btn" id="ciNext" style="margin-top:16px">Continue</button></div>`;
+  } else if (ci.stage === "choice") {
+    const happy = ci.reasons.includes("happy") && ci.reasons.length === 1;
+    const focus = ci.reasons.map(r => ROUND_FOCUS[r]).filter(Boolean)[0];
+    html = `<div class="card"><p class="label">Step 3 of 3</p><h3>What would you like to do next?</h3>
+      <button class="choice-card primary" id="ciContinue"><span class="big-ic">🔁</span><span><strong>Start another 21 days</strong><br>
+        <span class="muted">${focus ? esc(focus) : "A fresh round with the same daily steps, so the habits really stick."}</span></span></button>
+      <button class="choice-card" id="ciFinish"><span class="big-ic">${happy ? "🌟" : "🏁"}</span><span><strong>I'm finished for now</strong><br>
+        <span class="muted">Keep the maintenance plan, or cancel your subscription.</span></span></button></div>`;
+  } else if (ci.stage === "finished") {
+    const until = S.membership && S.membership.paid_until ? new Date(S.membership.paid_until).toLocaleDateString(undefined, { month: "long", day: "numeric" }) : null;
+    html = `<div class="card"><div class="big-ic">💛</div><h3>Thank you for doing the work</h3>
+      <p class="muted">Your Today page now shows a weekly maintenance focus to keep your results going.</p>
+      ${S.membership && S.membership.plan === "monthly" ? `<p style="margin-top:14px">If you'd like to stop your subscription, you can cancel in PayPal at any time. ${until ? `You'll keep full access until <strong>${until}</strong>.` : ""}</p>
+      <a class="btn btn-ghost full" href="https://www.paypal.com/myaccount/autopay/" target="_blank" rel="noopener" style="margin-top:12px">Open PayPal subscriptions</a>` : ""}
+      <button class="btn btn-purple full big-btn" id="ciDone" style="margin-top:12px">Back to Today</button></div>`;
+  }
+
+  view.innerHTML = `<div class="reader">${back}${html}</div>`;
+  $("ciBack").onclick = () => go("today");
+  const nx = $("ciNext");
+  if ($("ciQuiz")) $("ciQuiz").onclick = () => { try { sessionStorage.setItem("rejuva_ci", String(round())); } catch (e) {} };
+  if ($("ciSkip")) $("ciSkip").onclick = () => { ci.stage = "why"; renderCheckin(); };
+  if (ci.stage === "intro" && nx) nx.onclick = () => { ci.stage = "why"; renderCheckin(); };
+  if (ci.stage === "why") {
+    view.querySelectorAll(".chip").forEach(b => b.onclick = () => {
+      ci.note = $("ciNote").value;
+      const k = b.dataset.r;
+      ci.reasons = ci.reasons.includes(k) ? ci.reasons.filter(x => x !== k) : [...ci.reasons, k];
+      renderCheckin();
+    });
+    nx.onclick = () => { ci.note = $("ciNote").value.trim(); ci.stage = "choice"; renderCheckin(); window.scrollTo(0, 0); };
+  }
+  if ($("ciContinue")) $("ciContinue").onclick = () => saveCheckin("continue");
+  if ($("ciFinish")) $("ciFinish").onclick = () => saveCheckin("finish");
+  if ($("ciDone")) $("ciDone").onclick = () => { S.ci = null; go("today"); };
+}
+
+async function saveCheckin(choice) {
+  const ci = S.ci, p = S.profile;
+  const row = { user_id: S.user.id, round: round(), score_before: p.prev_quiz_score ?? null, score_after: p.quiz_score ?? null, reasons: ci.reasons, note: ci.note || null, choice };
+  const { error } = await sb.from("checkins").insert(row);
+  if (error && !/duplicate/i.test(error.message)) return toast(friendlyError(error));
+  S.checkins.push(row);
+  try { sessionStorage.removeItem("rejuva_ci"); } catch (e) {}
+  if (choice === "continue") {
+    const upd = { program_start: today(), program_round: round() + 1 };
+    const r = await sb.from("profiles").update(upd).eq("id", S.user.id);
+    if (r.error) return toast(friendlyError(r.error));
+    Object.assign(S.profile, upd);
+    S.ci = null; S.day = today();
+    toast(`Round ${upd.program_round} starts today. You've got this!`);
+    go("today");
+  } else {
+    ci.stage = "finished"; renderCheckin(); window.scrollTo(0, 0);
+  }
+}
+
+// ── GUIDED RITUAL PLAYER (one step after another, in rhythm) ──
+const P = { timer: null, item: null, i: 0, beat: 0, left: 0, paused: false, done: new Set(), sound: true, audio: null };
+function stopPlayer() { clearInterval(P.timer); P.timer = null; }
+function tick() {
+  if (!P.sound) return;
+  try {
+    P.audio = P.audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = P.audio.createOscillator(), g = P.audio.createGain();
+    o.frequency.value = 660; g.gain.setValueAtTime(0.0001, P.audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.15, P.audio.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, P.audio.currentTime + 0.18);
+    o.connect(g).connect(P.audio.destination); o.start(); o.stop(P.audio.currentTime + 0.2);
+  } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(30);
+}
+
+function renderPlayer(item) {
+  if (P.item !== item.slug) { P.item = item.slug; P.i = 0; P.done = new Set(); }
+  const steps = item.steps, st = steps[P.i], n = steps.length;
+  const total = st.reps ? st.reps * st.beat : st.seconds;
+  P.beat = 0; P.left = total; P.paused = false;
+  const img = st.image ? `<img src="${esc(st.image)}" alt="${esc(st.title)}" class="step-img">` : `<div class="step-img ph"><span>${item.slug === "gua-sha" ? "🪨" : item.slug === "ice-dip" ? "🧊" : item.slug === "cucumber-eyes" ? "🥒" : "💆🏾‍♀️"}</span></div>`;
+  view.innerHTML = `<div class="reader player">
+    <div class="spread"><button class="back-link" id="pBack">← Exit</button>
+      <button class="link-btn" id="pSound" aria-pressed="${P.sound}">${P.sound ? "🔔 Sound on" : "🔕 Sound off"}</button></div>
+    <div class="card">
+      <p class="label">${esc(item.title)} · Step ${P.i + 1} of ${n}</p>
+      <div class="pbar"><span style="width:${Math.round(P.i / n * 100)}%"></span></div>
+      ${img}
+      <h2 class="step-title">${esc(st.title)}</h2>
+      <p class="step-text">${esc(st.text)}</p>
+      <div class="rhythm" id="rhythm">
+        <div class="pulse" id="pulse"></div>
+        <div class="count"><b id="pCount">${st.reps ? `0 / ${st.reps}` : fmt(total)}</b><span id="pCue">${st.reps ? "Get ready…" : "Timer"}</span></div>
+      </div>
+      <div class="pctrl">
+        <button class="btn btn-ghost big-btn" id="pPrev" ${P.i === 0 ? "disabled" : ""} aria-label="Previous step">‹ Back</button>
+        <button class="btn btn-ghost big-btn" id="pPause">⏸ Pause</button>
+        <button class="btn btn-purple big-btn" id="pNext">${P.i === n - 1 ? "Finish ✓" : "Next ›"}</button>
+      </div>
+    </div>
+    <div class="card"><p class="label">All steps</p>
+      ${steps.map((x, j) => `<button class="step-row ${j === P.i ? "cur" : ""} ${P.done.has(j) ? "on" : ""}" data-j="${j}"><span class="tick small"><span>✓</span></span>${j + 1}. ${esc(x.title)}<em>${x.reps ? `${x.reps} strokes` : fmt(x.seconds)}</em></button>`).join("")}
+    </div></div>`;
+
+  $("pBack").onclick = () => history.back();
+  $("pSound").onclick = () => { P.sound = !P.sound; $("pSound").textContent = P.sound ? "🔔 Sound on" : "🔕 Sound off"; };
+  $("pPrev").onclick = () => { stopPlayer(); P.i = Math.max(0, P.i - 1); renderPlayer(item); };
+  $("pNext").onclick = () => nextStep(item);
+  $("pPause").onclick = () => { P.paused = !P.paused; $("pPause").textContent = P.paused ? "▶ Resume" : "⏸ Pause"; };
+  view.querySelectorAll(".step-row").forEach(b => b.onclick = () => { stopPlayer(); P.i = +b.dataset.j; renderPlayer(item); });
+
+  stopPlayer();
+  let warm = 2;   // two-second "get ready" before strokes begin
+  P.timer = setInterval(() => {
+    if (P.paused) return;
+    if (warm > 0) { warm--; return; }
+    if (st.reps) {
+      // one stroke per beat: pulse, tick, count up
+      P.left--;
+      const elapsed = total - P.left;
+      if ((elapsed - 1) % st.beat === 0) {
+        P.beat++;
+        tick();
+        const pulse = $("pulse"); if (pulse) { pulse.classList.remove("go"); void pulse.offsetWidth; pulse.style.animationDuration = st.beat + "s"; pulse.classList.add("go"); }
+        if ($("pCount")) $("pCount").textContent = `${Math.min(P.beat, st.reps)} / ${st.reps}`;
+        if ($("pCue")) $("pCue").textContent = "Stroke… and release";
+      }
+    } else {
+      P.left--;
+      if ($("pCount")) $("pCount").textContent = fmt(Math.max(0, P.left));
+      if (P.left <= 3 && P.left > 0) tick();
+    }
+    if (P.left <= 0) {
+      stopPlayer(); P.done.add(P.i);
+      if ($("pCue")) $("pCue").textContent = "Done ✓";
+      const at = P.i;
+      setTimeout(() => { if (S.open === item.slug + ":play" && P.i === at && !P.paused) nextStep(item); }, 1500);
+    }
+  }, 1000);
+}
+const fmt = sec => `${Math.floor(sec / 60)}:${pad(sec % 60)}`;
+
+async function nextStep(item) {
+  stopPlayer(); P.done.add(P.i);
+  if (P.i < item.steps.length - 1) { P.i++; renderPlayer(item); window.scrollTo(0, 0); return; }
+  await toggleRitual(item.slug, today(), true);
+  view.innerHTML = `<div class="reader"><div class="card ci-hero"><div class="big-ic">✨</div><h2>Ritual complete</h2>
+    <p class="muted">${esc(item.title)} is ticked off for today. Your skin thanks you.</p>
+    <button class="btn btn-purple full big-btn" id="pHome" style="margin-top:16px">Back to Today</button>
+    <button class="btn btn-ghost full" id="pAgain" style="margin-top:10px">Do it again</button></div></div>`;
+  P.item = null;
+  $("pHome").onclick = () => go("today");
+  $("pAgain").onclick = () => renderPlayer(item);
 }
 
 // ── Start ────────────────────────────────────────────
@@ -619,9 +989,13 @@ function renderLearn() {
   // Step 1: the quiz personalises everything, so it comes first
   if (!S.profile.quiz) return location.replace("quiz.html?onboard=1");
   // Step 2: no access until paid
-  if (!S.member) return renderPaywall();
+  if (!S.member) { history.replaceState({ pay: true }, "", "#pay"); history.pushState({ pay: true }, "", "#pay"); return renderPaywall(); }
 
-  const want = location.hash.slice(1);
+  await loadLibrary();
+  const [want, open] = location.hash.slice(1).split("/");
   scheduleBrowserReminder();
-  go(TABS.some(t => t.id === want) ? want : "today");
+  history.replaceState({ root: true }, "", location.pathname + location.search);
+  S.tab = null;   // make the first screen a new history entry above the root guard
+  const valid = TABS.some(t => t.id === want) || want === "checkin";
+  go(valid ? want : "today", valid ? (open ? decodeURIComponent(open) : null) : null);
 })();

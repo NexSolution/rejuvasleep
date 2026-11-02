@@ -1,6 +1,8 @@
 (function () {
   const CFG = window.REJUVA_CONFIG || {};
   const ONBOARD = new URLSearchParams(location.search).has("onboard");
+  const CHECKIN = new URLSearchParams(location.search).has("checkin");   // day-21 retake
+  const RETAKE = new URLSearchParams(location.search).has("retake");     // member retaking from the Menu
 
   // ── Questions ─────────────────────────────────────
   // pts = how much this answer adds to the Sleep Aging Score
@@ -337,6 +339,13 @@
     if (nl) nl.onclick = e => { e.preventDefault(); nl.textContent = "Checkout opens soon"; };
     window.scrollTo(0, 0);
 
+    if (CHECKIN || RETAKE) {
+      // Members retaking the quiz: no offer, just head back into the app
+      const offer = app.querySelector(".offer");
+      if (offer) offer.outerHTML = `<div class="result-card" style="text-align:center"><h3 style="font-size:1.5rem;margin-bottom:8px">Nice — your new score is saved</h3>
+        <p style="color:var(--muted);margin-bottom:18px">${CHECKIN ? "Let's compare it with day 1 and plan what's next." : "Your plan and daily routine now use your new answers."}</p>
+        <a class="btn btn-gold" style="width:100%" href="${CHECKIN ? "app.html#checkin" : "app.html"}" id="payBtn">${CHECKIN ? "See my progress" : "Back to my plan"}</a></div>`;
+    }
     if (ONBOARD) saveToAccount(r.score);
   }
 
@@ -348,7 +357,11 @@
       const { sb } = await import("./supa.js");
       const { data: { session } } = await sb.auth.getSession();
       if (!session) { location.replace("login.html?mode=login"); return; }
-      const { error } = await sb.from("profiles").update({ quiz: answers, quiz_score: score }).eq("id", session.user.id);
+      // Keep the previous score so the check-in can show before → after
+      const { data: cur } = await sb.from("profiles").select("quiz_score").eq("id", session.user.id).maybeSingle();
+      const upd = { quiz: answers, quiz_score: score };
+      if (cur && cur.quiz_score != null) upd.prev_quiz_score = cur.quiz_score;
+      const { error } = await sb.from("profiles").update(upd).eq("id", session.user.id);
       if (error) console.error(error);
     } catch (e) { console.error(e); }
     finally { if (pay) pay.style.pointerEvents = ""; }
