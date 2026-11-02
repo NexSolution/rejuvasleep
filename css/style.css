@@ -153,3 +153,9 @@ footer a{color:var(--lavender)}
   .btn{width:100%}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* keep everything inside the phone screen */
+html,body{overflow-x:hidden}
+.hero-grid>*,.split>*,.grid2>*,.grid3>*,.inside>*,.gallery>*{min-width:0}
+.hero-photo,.rounded{width:100%;height:auto}
+h1,h2,h3{overflow-wrap:break-word}
