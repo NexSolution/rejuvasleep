@@ -8,7 +8,8 @@ window.REJUVA_CONFIG = {
   // Monthly subscription: create the plan in PayPal, then paste its Plan ID here (starts with P-)
   paypalPlanId: "P-6BJ005219R9397542NLUO7RQ",
   introPrice: "$9.99",      // first month
-  monthlyPrice: "$19.99",   // every month after
+  monthlyPrice: "$19.99",   // every billing cycle after
+  billingDays: 0,           // 0 = monthly. Set to 21 once your PayPal plan bills every 21 days
 
   price: "$9.99",           // shown on the offer: first-month price
   comparePrice: "$19.99",   // crossed out next to it

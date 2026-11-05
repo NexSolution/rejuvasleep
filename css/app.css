@@ -297,3 +297,67 @@ html[data-text="xl"]{font-size:125%}
 .app-body .card.hello h3{color:#fff}
 .app-body .card.hello p{color:rgba(255,255,255,.88)}
 .app-body .player .spread{align-items:center}
+
+/* ═══════════ Settings, pause, progress ═══════════ */
+.bottom-nav button{font-size:.72rem;padding:0 2px}
+.bottom-nav .ni{font-size:1.4rem}
+@media (max-width:380px){.bottom-nav button{font-size:.66rem}.bottom-nav .ni{font-size:1.25rem}}
+
+.app-body .btn-danger{background:linear-gradient(180deg,#ff8080,#e03131);color:#fff;box-shadow:0 4px 0 #a51d1d,0 10px 20px -10px rgba(165,29,29,.5)}
+.danger-zone{border-color:#ffd0d0!important}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line);font-size:1rem}
+.kv:first-child{border-top:0}
+.kv span{color:var(--muted)}
+.kv b{color:var(--navy);text-align:right}
+.warn-box{margin-top:14px;background:#fff7e6;border:2px solid #ffd27a;border-radius:16px;padding:14px}
+.row-chips{grid-template-columns:repeat(2,1fr);margin-top:8px}
+.row-chips .chip{text-align:center}
+.chip.on::before{content:"✓ "}
+.size-row.big{padding:6px 0 0;gap:10px}
+.size-row.big button{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:72px;border-radius:14px;border:2px solid var(--line);background:#fff;cursor:pointer;font-family:'DM Serif Display',serif;color:var(--navy)}
+.size-row.big button small{font:600 .72rem 'Inter',sans-serif;color:var(--muted);margin-top:2px}
+.size-row.big button.on{border-color:var(--purple);background:var(--pale)}
+.plain-list{list-style:none;display:grid;gap:12px;margin:16px 0;font-size:1.05rem}
+.app-body input[type=date]{min-height:52px;font-size:1.05rem}
+
+/* today additions */
+.paused-card{background:linear-gradient(135deg,#eef4ff,#e3ecff)!important;border:2px solid #b7c9ff!important}
+.renew{border:2px solid #ffd27a!important;background:linear-gradient(135deg,#fffaf0,#fff2d9)!important}
+.renew .label,.paused-card .label{font-size:.95rem}
+.wd.paused{background:repeating-linear-gradient(135deg,#f3f3f8 0 6px,#e8e8f0 6px 12px)}
+.wd.paused .dp{color:#55556d;font-weight:700}
+.nav-arrow:disabled{opacity:.3;cursor:default;box-shadow:none}
+.cal-foot{margin-top:12px;font-size:.9rem;color:var(--muted);text-align:center}
+.cal-foot .link-btn{margin:0;font-size:.9rem}
+.sec-time{font-weight:500;font-size:.85rem;color:var(--muted);margin-left:6px}
+.countdown{display:flex;flex-direction:column;gap:8px;margin:12px 0 10px;padding:12px;border-radius:14px;background:var(--pale);font-size:.95rem;color:var(--navy)}
+.countdown b{font-size:1.4rem;color:var(--purple)}
+.score-card .btn{width:100%}
+
+/* progress chart */
+.round-bars{height:180px}
+.round-bars .bar{border:0;background:none;padding:0;cursor:pointer;min-width:0}
+.round-bars .bar i{max-width:16px;border-radius:4px 4px 2px 2px}
+.round-bars .bar:focus-visible{outline:2px solid var(--purple);border-radius:4px}
+.table-view{margin-top:12px}
+.table-view summary{cursor:pointer;font-weight:600;color:var(--purple);min-height:44px;display:flex;align-items:center}
+.metric{padding:16px 0;border-top:1px solid var(--line)}
+.metric:first-of-type{border-top:0}
+.metric .spread{align-items:flex-start}
+.metric .t{font-weight:700;color:var(--navy);font-size:1.05rem}
+.metric .s{font-size:.88rem;color:var(--muted);margin-top:2px}
+.status{flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border-radius:99px;font-size:.8rem;font-weight:700;white-space:nowrap}
+.st-up{background:#e3faf2;color:#0a6b5c}
+.st-ok{background:#eef0ff;color:#3d2fb0}
+.st-down{background:#fff0e6;color:#a3460c}
+.st-none{background:#f2f2f6;color:#6b6b85}
+.mini{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;height:84px;margin-top:12px;align-items:end}
+.mb{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+.mb i{display:block;width:100%;max-width:48px;border-radius:4px 4px 2px 2px;background:#cfc8f7}
+.mb.cur i{background:#6c5ce7}
+.mb b{font-size:.72rem;color:var(--muted);margin-top:4px}
+.mb em{font-style:normal;font-size:.8rem;font-weight:700;color:var(--navy)}
+.m-tip{margin-top:12px;background:#fff7e6;border-radius:12px;padding:10px 12px;font-size:.92rem}
+.wins{margin-top:14px;background:#e9fff7;color:#0a6b5c;border-radius:12px;padding:12px;font-weight:600}
+.app-body #resumeDate{display:block;width:100%;margin-top:6px;padding:12px 14px;border:2px solid var(--line);border-radius:14px;font:400 1.05rem 'Inter',sans-serif;color:var(--text);background:#fff}
+.app-body #resumeDate:focus{outline:none;border-color:var(--purple)}
