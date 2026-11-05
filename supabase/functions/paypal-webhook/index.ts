@@ -61,12 +61,14 @@ async function paypalGet(token: string, path: string) {
   return r.json();
 }
 
-async function db(path: string, init: RequestInit) {
+async function db(path: string, init: RequestInit): Promise<any> {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: { apikey: SERVICE_KEY, authorization: `Bearer ${SERVICE_KEY}`, "content-type": "application/json", ...(init.headers || {}) },
   });
   if (!r.ok) throw new Error(`Database ${path} failed: ${r.status} ${await r.text()}`);
+  const t = await r.text();
+  try { return t ? JSON.parse(t) : null; } catch { return null; }
 }
 
 const iso = (d: Date) => d.toISOString();
@@ -82,14 +84,23 @@ async function grantSubscription(sub: any): Promise<Response> {
     console.log(`Ignored subscription ${sub.id}: plan ${sub.plan_id} is not ${PLAN_ID}`);
     return json(200, { ignored: "plan" });
   }
+  const fields = { plan: "monthly", status: "active", paid_until: paidUntil(sub), next_billing_at: sub?.billing_info?.next_billing_time || null, cancelled_at: null };
+  // Renewals: update the row already linked to this subscription (works even if the member changed their email)
+  const linked = await db(`memberships?subscription_id=eq.${encodeURIComponent(sub.id)}`, {
+    method: "PATCH", headers: { prefer: "return=representation" }, body: JSON.stringify(fields),
+  });
+  if (Array.isArray(linked) && linked.length) {
+    console.log(`Subscription ${sub.id} renewed until ${fields.paid_until}`);
+    return json(200, { granted: true });
+  }
   const email = String(sub.custom_id || sub.subscriber?.email_address || "").trim().toLowerCase();
   if (!email.includes("@")) throw new Error(`Subscription ${sub.id} has no usable email`);
   await db("memberships?on_conflict=email", {
     method: "POST",
     headers: { prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify({ email, plan: "monthly", source: "paypal", subscription_id: sub.id, status: "active", paid_until: paidUntil(sub) }),
+    body: JSON.stringify({ email, source: "paypal", subscription_id: sub.id, ...fields }),
   });
-  console.log(`Subscription ${sub.id} active for ${email} until ${paidUntil(sub)}`);
+  console.log(`Subscription ${sub.id} active for ${email} until ${fields.paid_until}`);
   return json(200, { granted: true });
 }
 
@@ -126,10 +137,16 @@ Deno.serve(async (req) => {
       return await grantSubscription(sub);
     }
     if (type === "BILLING.SUBSCRIPTION.CANCELLED") {
-      // Keep access until the end of the month they already paid for
-      await setSubscription(res.id, { status: "cancelled" });
-      console.log(`Subscription ${res.id} cancelled; access continues until paid_until`);
+      // Cancelling stops the plan right away; history is kept
+      await setSubscription(res.id, { status: "cancelled", paid_until: iso(new Date()), cancelled_at: iso(new Date()), next_billing_at: null });
+      console.log(`Subscription ${res.id} cancelled; plan stopped`);
       return json(200, { cancelled: true });
+    }
+    if (type === "BILLING.SUBSCRIPTION.PAYMENT.FAILED") {
+      // PayPal retries automatically; access continues through the grace days meanwhile
+      await setSubscription(res.id, { status: "past_due" });
+      console.log(`Subscription ${res.id} payment failed`);
+      return json(200, { past_due: true });
     }
     if (type === "BILLING.SUBSCRIPTION.SUSPENDED" || type === "BILLING.SUBSCRIPTION.EXPIRED") {
       await setSubscription(res.id, { status: type.split(".").pop()!.toLowerCase(), paid_until: iso(new Date()) });
