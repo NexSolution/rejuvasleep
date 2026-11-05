@@ -1,4 +1,5 @@
 import { sb, esc, friendlyError } from "./supa.js";
+import { createShop, cartCount } from "./shop.js?v=16";
 
 const CFG = window.REJUVA_CONFIG || {};
 const $ = id => document.getElementById(id);
@@ -246,13 +247,15 @@ const TABS = [
   { id: "plan", label: "My plan & reminders", ic: "🗓️" },
   { id: "rituals", label: "Face rituals", ic: "🧊" },
   { id: "learn", label: "Learn", ic: "📚" },
+  { id: "shop", label: "Shop", ic: "🛍️" },
+  { id: "orders", label: "My orders", ic: "📦" },
   { id: "settings", label: "Settings", ic: "⚙️" }
 ];
 
 function renderMenu() {
   const items = S.member
     ? TABS.map(t => `<button role="menuitem" data-tab="${t.id}" class="${S.tab === t.id ? "on" : ""}"><span>${t.ic}</span>${t.label}</button>`).join("") + '<div class="sep"></div>'
-    : `<button role="menuitem" data-tab="settings" class="${S.tab === "settings" ? "on" : ""}"><span>⚙️</span>Settings</button><div class="sep"></div>`;
+    : TABS.filter(t => ["shop", "orders", "settings"].includes(t.id)).map(t => `<button role="menuitem" data-tab="${t.id}" class="${S.tab === t.id ? "on" : ""}"><span>${t.ic}</span>${t.label}</button>`).join("") + '<div class="sep"></div>';
   const manage = S.member && S.membership && S.membership.plan === "monthly"
     ? `<a role="menuitem" href="https://www.paypal.com/myaccount/autopay/" target="_blank" rel="noopener"><span>💳</span>Manage or cancel subscription</a>` : "";
   $("menuList").innerHTML = `<p class="menu-email">Signed in as<br><strong>${esc(S.user.email)}</strong></p>` + items + `
@@ -292,6 +295,7 @@ async function go(tab, open = null, { push = true } = {}) {
 
 function render() {
   // Without an active plan: history (Track) and Settings stay open; everything else shows the restart page
+  if (S.tab === "shop" || S.tab === "orders") return renderShop();
   if (!S.member && !["track", "settings"].includes(S.tab)) return renderPaywall();
   ({ settings: renderSettings, today: renderToday, track: renderTrack, plan: renderPlan, rituals: renderRituals, learn: renderLearn, checkin: renderCheckin })[S.tab]();
 }
@@ -311,7 +315,7 @@ window.addEventListener("popstate", e => {
 
 // Big bottom navigation, always visible for members
 const NAV = [["today", "🌙", "Today"], ["track", "📊", "Track"], ["rituals", "🧊", "Rituals"], ["plan", "🗓️", "Plan"], ["learn", "📚", "Learn"], ["settings", "⚙️", "Settings"]];
-const NAV_ENDED = [["today", "🔁", "Restart"], ["track", "📊", "History"], ["settings", "⚙️", "Settings"]];
+const NAV_ENDED = [["today", "🔁", "Restart"], ["track", "📊", "History"], ["shop", "🛍️", "Shop"], ["settings", "⚙️", "Settings"]];
 function renderNav() {
   const nav = $("bottomNav");
   if (!S.member && !S.membership) { nav.hidden = true; return; }
@@ -329,6 +333,22 @@ function applyTextSize(sz) {
   try { localStorage.setItem("rejuva_text", sz); } catch (e) {}
 }
 try { applyTextSize(localStorage.getItem("rejuva_text") || "large"); } catch (e) { applyTextSize("large"); }
+
+// ── Shop (anyone signed in can buy; it doesn't need a plan) ──
+const shop = createShop({
+  view, toast, getUser: () => S.user,
+  // shop routes live after "#shop/…"; orders are part of the shop too
+  navigate: (r, opts) => { S.shopOpts = opts || null; r === "orders" ? go("orders") : go("shop", r || null); }
+});
+function renderShop() {
+  const route = S.tab === "orders" ? (S.open ? S.open : "orders") : (S.open || "");
+  const opts = S.shopOpts || {}; S.shopOpts = null;
+  shop.render(route, { ...opts, cached: true });
+}
+const cartBadge = () => { const b = $("cartBtn"); if (!b) return; const n = cartCount(); b.querySelector("span").textContent = n; b.classList.toggle("has", n > 0); };
+window.addEventListener("cartchange", cartBadge);
+if ($("cartBtn")) $("cartBtn").onclick = () => go("shop", "cart");
+cartBadge();
 
 // ── Paywall: no access until subscribed ──────────────
 let pollTimer;
@@ -1570,7 +1590,8 @@ async function nextStep(item) {
   // Step 2: no access until paid
 
   await loadLibrary();
-  const [want, open] = location.hash.slice(1).split("/");
+  const [want, ...rest] = location.hash.slice(1).split("/");
+  const open = rest.join("/");
   scheduleBrowserReminder();
   history.replaceState({ root: true }, "", location.pathname + location.search);
   S.tab = null;   // make the first screen a new history entry above the root guard

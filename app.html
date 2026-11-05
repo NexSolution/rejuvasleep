@@ -7,16 +7,19 @@
 <meta name="robots" content="noindex">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=15">
-<link rel="stylesheet" href="css/app.css?v=15">
+<link rel="stylesheet" href="css/style.css?v=16">
+<link rel="stylesheet" href="css/app.css?v=16">
 </head>
 <body class="app-body">
   <header class="app-top">
     <div class="wrap">
       <a href="app.html" class="logo"><span class="moon"></span>RejuvaSleep</a>
+      <div class="row top-actions">
+      <button class="menu-btn cart-btn" id="cartBtn" aria-label="Shop cart">🛒 <span>0</span></button>
       <div class="menu-wrap" id="menuWrap">
         <button class="menu-btn" id="menuBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="menuList">Menu <span aria-hidden="true">☰</span></button>
         <div class="menu-list" id="menuList" role="menu" hidden></div>
+      </div>
       </div>
     </div>
   </header>
@@ -25,7 +28,7 @@
   <nav class="bottom-nav" id="bottomNav" aria-label="Sections" hidden></nav>
   <div class="toast" id="toast" role="status"></div>
 
-<script src="js/config.js?v=15"></script>
-<script type="module" src="js/app.js?v=15"></script>
+<script src="js/config.js?v=16"></script>
+<script type="module" src="js/app.js?v=16"></script>
 </body>
 </html>

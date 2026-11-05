@@ -6,8 +6,8 @@
 <title>Log in — RejuvaSleep</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=15">
-<link rel="stylesheet" href="css/app.css?v=15">
+<link rel="stylesheet" href="css/style.css?v=16">
+<link rel="stylesheet" href="css/app.css?v=16">
 </head>
 <body class="quiz-body">
   <div class="narrow">
@@ -43,13 +43,14 @@
     </div>
   </div>
 
-<script src="js/config.js?v=15"></script>
+<script src="js/config.js?v=16"></script>
 <script type="module">
 import { sb, siteBase, readLocalQuiz, friendlyError } from "./js/supa.js";
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 let mode = params.get("mode") === "login" ? "login" : "signup";
+const home = params.get("next") === "admin" ? "admin.html" : params.get("next") === "shop" ? "shop.html" : "app.html";
 
 const COPY = {
   signup: { title: "Save your plan", sub: "Create your account, then answer a few questions so we can build your personal plan.", btn: "Create my account" },
@@ -89,7 +90,7 @@ if (quiz && quiz.answers && quiz.answers.name) $("name").value = quiz.answers.na
 
 // Already logged in? Go straight to the app.
 const { data: { session } } = await sb.auth.getSession();
-if (session && !params.get("reset")) location.replace("app.html");
+if (session && !params.get("reset")) location.replace(home);
 
 sb.auth.onAuthStateChange(evt => { if (evt === "PASSWORD_RECOVERY") setMode("reset"); });
 if (params.get("reset")) setMode("reset"); else setMode(mode);
@@ -122,7 +123,7 @@ $("form").onsubmit = async e => {
     } else if (mode === "login") {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) throw error;
-      location.replace("app.html");
+      location.replace(home);
     } else if (mode === "forgot") {
       const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: siteBase + "login.html?reset=1" });
       if (error) throw error;

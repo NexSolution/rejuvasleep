@@ -1,5 +1,6 @@
 // RejuvaSleep — PayPal webhook
 // Unlocks a membership when a PayPal payment completes, and removes it if the payment is refunded.
+// Also the backup that marks shop orders paid or refunded.
 //
 // Secrets to set in Supabase → Edge Functions → Secrets:
 //   PAYPAL_CLIENT_ID   PayPal live app Client ID
@@ -169,8 +170,42 @@ Deno.serve(async (req) => {
       return json(200, { revoked: true });
     }
 
+    // ── Shop orders (custom_id "order:<id>") ───────────
+    // The checkout function normally marks them paid; this is the backup if the browser closed mid-payment.
+    const shopOrder = String(res.custom_id || "").startsWith("order:") ? String(res.custom_id).slice(6) : "";
+    if (type === "PAYMENT.CAPTURE.COMPLETED" && shopOrder) {
+      if (!/^[0-9a-f-]{36}$/.test(shopOrder)) return json(200, { ignored: "bad order id" });
+      const rows = await db(`orders?id=eq.${shopOrder}&select=id,number,status,total_cents,currency,admin_note`, { method: "GET" });
+      const o = rows?.[0];
+      if (!o) return json(200, { ignored: "unknown order" });
+      const amountOk = res.amount?.currency_code === o.currency && Math.round(Number(res.amount?.value) * 100) === o.total_cents;
+      if (!amountOk) { console.error(`Order #${o.number}: webhook amount ${res.amount?.value} does not match`); return json(200, { ignored: "amount" }); }
+      if (o.status === "pending") {
+        await db(`orders?id=eq.${o.id}&status=eq.pending`, { method: "PATCH", headers: { prefer: "return=minimal" },
+          body: JSON.stringify({ status: "paid", paid_at: new Date().toISOString(), paypal_capture_id: res.id }) });
+        console.log(`Order #${o.number} marked paid by webhook`);
+      } else if (o.admin_note && o.admin_note.startsWith("PayPal is still reviewing")) {
+        await db(`orders?id=eq.${o.id}`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify({ admin_note: null }) });
+      }
+      return json(200, { order: true });
+    }
+    if (type === "PAYMENT.CAPTURE.REFUNDED" || type === "PAYMENT.CAPTURE.REVERSED") {
+      // Refund events don't always carry custom_id, so match shop orders by the capture id (no-op for memberships)
+      const captureId = type === "PAYMENT.CAPTURE.REVERSED" ? res.id : ((res.links || []).find((l: any) => l.rel === "up")?.href || "").split("/").pop();
+      if (captureId) {
+        const hit = await db(`orders?paypal_capture_id=eq.${encodeURIComponent(captureId)}`, { method: "PATCH", headers: { prefer: "return=representation" }, body: JSON.stringify({ status: "refunded" }) });
+        if (Array.isArray(hit) && hit.length) { console.log(`Shop order #${hit[0].number} refunded`); return json(200, { order: true }); }
+      }
+    }
+    if ((type === "PAYMENT.CAPTURE.DENIED" || type === "PAYMENT.CAPTURE.DECLINED") && shopOrder && /^[0-9a-f-]{36}$/.test(shopOrder)) {
+      await db(`orders?id=eq.${shopOrder}&status=in.(pending,paid)`, { method: "PATCH", headers: { prefer: "return=minimal" },
+        body: JSON.stringify({ status: "cancelled", admin_note: "PayPal denied this payment. Don't order from the supplier." }) });
+      return json(200, { order: true });
+    }
+
     // ── One-time payments ──────────────────────────────
     if (type === "PAYMENT.CAPTURE.COMPLETED") {
+      if (String(res.invoice_id || "").startsWith("RS-")) return json(200, { ignored: "shop order" });
       const amount = Number(res.amount?.value || 0);
       if (amount + 0.001 < EXPECTED) {
         console.log(`Ignored capture ${res.id}: amount ${amount} below ${EXPECTED}`);
@@ -183,6 +218,12 @@ Deno.serve(async (req) => {
         const orderId = res.supplementary_data?.related_ids?.order_id;
         if (!orderId) throw new Error(`Capture ${res.id} has no order id`);
         const order = await paypalGet(token, `/v2/checkout/orders/${orderId}`);
+        // Never unlock a membership for a shop purchase
+        const pu = order.purchase_units?.[0] || {};
+        if (String(pu.custom_id || "").startsWith("order:") || String(pu.invoice_id || "").startsWith("RS-")) {
+          console.log(`Capture ${res.id} is a shop order; no membership change`);
+          return json(200, { ignored: "shop order" });
+        }
         email = String(order.purchase_units?.[0]?.custom_id || order.payer?.email_address || "").trim().toLowerCase();
       }
       if (!email.includes("@")) throw new Error(`Capture ${res.id} has no usable email`);

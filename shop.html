@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shop — RejuvaSleep</title>
+<meta name="description" content="Sleep masks, silk pillowcases, gua sha tools and sleep supplements hand-picked by RejuvaSleep. Shipping worldwide.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=16">
+<link rel="stylesheet" href="css/app.css?v=16">
+</head>
+<body class="app-body">
+  <header class="app-top">
+    <div class="wrap">
+      <a href="shop.html" class="logo"><span class="moon"></span>RejuvaSleep</a>
+      <div class="row top-actions">
+        <button class="menu-btn cart-btn" id="cartBtn" aria-label="Cart">🛒 <span id="cartN">0</span></button>
+        <a class="menu-btn" id="acctLink" href="login.html?mode=login&next=shop">Log in</a>
+      </div>
+    </div>
+  </header>
+  <main class="app-main"><div class="wrap" id="view"><p class="loading">Loading the shop…</p></div></main>
+  <footer style="background:none;color:var(--muted)">
+    <div class="wrap">RejuvaSleep products are for general wellness, not medical treatment. Read labels before use.<br>
+    Questions? <a href="mailto:rejuvasleep.help@gmail.com" style="color:var(--purple)">rejuvasleep.help@gmail.com</a> · <a href="./" style="color:var(--purple)">Take the free Sleep Aging Quiz</a></div>
+  </footer>
+  <div class="toast" id="toast" role="status"></div>
+
+<script src="js/config.js?v=16"></script>
+<script type="module">
+import { sb } from "./js/supa.js";
+import { createShop, cartCount } from "./js/shop.js?v=16";
+
+const $ = id => document.getElementById(id);
+const view = $("view");
+let user = null;
+function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2400); }
+const badge = () => { const n = cartCount(); $("cartN").textContent = n; $("cartBtn").classList.toggle("has", n > 0); };
+window.addEventListener("cartchange", badge); badge();
+
+const route = () => decodeURIComponent(location.hash.slice(1));
+function navigate(r, opts) {
+  history.pushState({ r }, "", "#" + r);
+  shop.render(r, { ...(opts || {}), cached: true }); window.scrollTo(0, 0);
+}
+const shop = createShop({ view, navigate, toast, getUser: () => user });
+$("cartBtn").onclick = () => navigate("cart");
+window.addEventListener("popstate", () => { shop.render(route(), { cached: true }); window.scrollTo(0, 0); });
+
+const { data: { session } } = await sb.auth.getSession();
+user = session ? session.user : null;
+if (user) { $("acctLink").textContent = "My account"; $("acctLink").href = "app.html"; }
+history.replaceState({ r: route() }, "", location.href);
+shop.render(route());
+</script>
+</body>
+</html>

@@ -36,3 +36,13 @@ Table Editor → `library` → Insert row: `slug` (e.g. `gua-sha-video`), `kind`
 ## Functions
 - `paypal-webhook` — PayPal events → memberships
 - `manage-subscription` — signed-in member's own plan: status, cancel, pay an outstanding balance
+
+## Shop
+
+- `shop.html` is the public shop (anyone can buy). Members also get **Shop** and **My orders** in the app menu, plus a cart button in the header.
+- Checkout runs through the `shop-checkout` edge function. Prices, shipping and country limits are worked out on the server from the `products` and `shop_settings` tables. PayPal shows a "Debit or Credit Card" button, so no PayPal account is needed.
+- Order statuses: paid → ordered → shipped → delivered (or cancelled / refunded). Customers see a timeline and tracking link. Guests open their order with a private link (`shop.html#order/<id>/<token>`), which is also saved on their device.
+- `admin.html` is the team page (emails in the `admins` table): orders to fulfil, copy address, supplier links, status and tracking, an "email the customer" button, products with photos and supplier costs, and shipping settings.
+- Products have `blocked_countries` (ISO codes). The melatonin draft blocks countries where it is prescription-only or restricted — check with your supplier before changing it.
+- The PayPal webhook marks shop orders paid (backup), refunded or denied, and never turns a shop payment into a membership.
+- Add the webhook events `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED` and `PAYMENT.CAPTURE.DENIED` in PayPal.
