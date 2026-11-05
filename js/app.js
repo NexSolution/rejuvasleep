@@ -198,7 +198,7 @@ async function load() {
     sb.from("sleep_logs").select("*").gte("log_date", since).order("log_date"),
     sb.from("water_logs").select("*").gte("log_date", since).order("log_date"),
     sb.from("ritual_logs").select("*").gte("log_date", since),
-    sb.from("memberships").select("plan,status,paid_until,created_at,next_billing_at,cancelled_at,subscription_id").maybeSingle(),
+    sb.from("memberships").select("plan,status,paid_until,created_at,next_billing_at,cancelled_at,subscription_id,paused_until").maybeSingle(),
     sb.from("routine_checks").select("log_date,item").gte("log_date", since),
     sb.from("checkins").select("*").order("round"),
     sb.from("pauses").select("*").order("start_date")
@@ -210,6 +210,7 @@ async function load() {
   S.membership = ms.data || null;
   S.checks = rc.data || []; S.checkins = ck.data || []; S.pauses = pz.data || [];
   await syncStopPause();
+  await catchUpBillingResume();
 
   // Every new account answers the quiz after confirming their email, so never
   // reuse answers saved in this browser from an earlier visit or another account.
@@ -550,7 +551,7 @@ function renderToday() {
 
   view.innerHTML = `<div class="stack">
     ${pause ? `<div class="card notice paused-card"><p class="label">⏸ Plan paused</p>
-      <p>Your plan is paused${pause.end_date ? ` and restarts automatically on <strong>${fmtDate(pause.end_date, { weekday: "long", month: "long", day: "numeric" })}</strong>` : ` until you restart it`}. Your days are saved and your 21 days move out to match.</p>
+      <p>Your plan is paused${pause.end_date ? ` and restarts automatically on <strong>${fmtDate(pause.end_date, { weekday: "long", month: "long", day: "numeric" })}</strong>` : ` until you restart it`}. Your days are saved and your 21 days move out to match.${hasBilling() ? " Payments are paused too." : ""}</p>
       <button class="btn btn-purple btn-sm" id="resumeNow" style="margin-top:10px">Restart my plan now</button></div>` : ""}
     ${needsCheckin() ? `<button class="card checkin-cta" id="ciBtn"><span class="big-ic">🎉</span><span><strong>${rdNow >= 19 ? "Your 21 days are almost done!" : "You've completed your 21-day reset!"}</strong><br>Take your 2-minute check-in to see your progress.</span><span class="go">›</span></button>` : ""}
     ${renewal}
@@ -1034,12 +1035,27 @@ function renderLearn() {
     const item = items.find(i => i.slug === S.open);
     if (item) { view.innerHTML = readerView(item); $("back").onclick = () => history.back(); return; }
   }
+  const topic = i => ((i.targets || []).find(t => t.startsWith("topic:")) || "").slice(6);
   const videos = items.filter(i => i.kind === "video"), articles = items.filter(i => i.kind === "article");
+  const groups = [
+    ["positions", "🛏️ Sleeping positions", "How you lie at night shows on your face, neck and back."],
+    ["practices", "🌿 Sleep practices", "Simple daily habits that help you fall asleep and stay asleep."],
+    ["", "📖 Sleep and skin basics", ""]
+  ];
   const card = i => `<button class="card r-card" data-open="${esc(i.slug)}"><h4>${i.kind === "video" ? "▶ " : ""}${esc(i.title)}</h4><p class="muted" style="font-size:.9rem">${esc(i.summary)}</p><p class="meta">${i.kind === "video" ? "Video" : `${i.minutes || 3} min read`}</p></button>`;
+  const f = S.learnTopic || "all";
+  const chips = `<div class="chips row-chips learn-chips">${[["all", "All"], ...groups.map(([k, t]) => [k || "basics", t])].map(([k, t]) => `<button class="chip${f === k ? " on" : ""}" data-topic="${k}">${t}</button>`).join("")}</div>`;
+  const sections = groups.map(([k, t, sub]) => {
+    if (f !== "all" && f !== (k || "basics")) return "";
+    const list = articles.filter(i => topic(i) === k || (!k && !groups.some(g => g[0] && g[0] === topic(i))));
+    return list.length ? `<h3 style="margin:22px 0 4px">${t}</h3>${sub ? `<p class="muted" style="margin:0 0 12px">${sub}</p>` : `<div style="height:8px"></div>`}<div class="grid3">${list.map(card).join("")}</div>` : "";
+  }).join("");
   view.innerHTML = `<h2>Learn</h2><p class="lede">Short reads and videos on sleep, skin and recovery.</p>
-    ${videos.length ? `<h3 style="margin:10px 0 12px">Videos</h3><div class="grid3">${videos.map(card).join("")}</div>` : ""}
-    ${articles.length ? `<h3 style="margin:22px 0 12px">Articles</h3><div class="grid3">${articles.map(card).join("")}</div>` : (videos.length ? "" : libraryEmpty())}`;
+    ${articles.length ? chips : ""}
+    ${videos.length && f === "all" ? `<h3 style="margin:10px 0 12px">Videos</h3><div class="grid3">${videos.map(card).join("")}</div>` : ""}
+    ${articles.length ? sections : (videos.length ? "" : libraryEmpty())}`;
   view.querySelectorAll("[data-open]").forEach(b => b.onclick = () => go("learn", b.dataset.open));
+  view.querySelectorAll("[data-topic]").forEach(b => b.onclick = () => { S.learnTopic = b.dataset.topic; renderLearn(); });
 }
 
 // ── SETTINGS ─────────────────────────────────────────
@@ -1057,18 +1073,33 @@ async function saveSchedule(bed, wake, water) {
   toast("Sleep schedule saved"); return true;
 }
 
+const hasBilling = () => !!(S.membership && S.membership.subscription_id);
+
 async function pausePlan(resumeOn) {
   if (openPause()) return toast("Your plan is already paused.");
-  const row = { user_id: S.user.id, start_date: today(), end_date: resumeOn || null, kind: "pause" };
+  if (!resumeOn) return toast(`Pick the day you'll be back (up to ${MAX_PAUSE} days).`);
+  // Pause the payments first, so nobody is paused in the app but still charged
+  if (hasBilling()) {
+    try { await callBilling("pause", { resume_on: resumeOn }); }
+    catch (err) { return toast(err.message); }
+    Object.assign(S.membership, { status: "paused", paused_until: resumeOn });
+    billing = null;
+  }
+  const row = { user_id: S.user.id, start_date: today(), end_date: resumeOn, kind: "pause" };
   const { data, error } = await sb.from("pauses").insert(row).select().single();
   if (error) return toast(friendlyError(error));
   S.pauses.push(data || row);
-  toast(resumeOn ? `Paused. Your plan restarts on ${fmtDate(resumeOn, { weekday: "long", month: "short", day: "numeric" })}.` : "Paused. Restart it anytime from Today or Settings.");
+  toast(`Paused. Your plan and payments restart on ${fmtDate(resumeOn, { weekday: "long", month: "short", day: "numeric" })}.`);
   render();
 }
 
 async function resumePlan() {
   const z = openPause(); if (!z) return;
+  if (hasBilling() && S.membership.status === "paused") {
+    try { await callBilling("resume"); } catch (err) { return toast(err.message); }
+    Object.assign(S.membership, { status: "active", paused_until: null });
+    billing = null;
+  }
   const r = z.start_date >= today()
     ? await sb.from("pauses").delete().eq("id", z.id)
     : await sb.from("pauses").update({ end_date: today() }).eq("id", z.id);
@@ -1078,8 +1109,16 @@ async function resumePlan() {
   render();
 }
 
-async function callBilling(action) {
-  const { data, error } = await sb.functions.invoke("manage-subscription", { body: { action } });
+// The nightly job restarts billing on the restart date; this catches anyone who opens the app first
+async function catchUpBillingResume() {
+  const m = S.membership;
+  if (!m || m.status !== "paused" || !m.subscription_id) return;
+  if (m.paused_until && m.paused_until > today() && openPause()) return;
+  try { await callBilling("resume"); Object.assign(m, { status: "active", paused_until: null }); billing = null; } catch (e) {}
+}
+
+async function callBilling(action, extra) {
+  const { data, error } = await sb.functions.invoke("manage-subscription", { body: { action, ...(extra || {}) } });
   if (error) {
     let msg = "Something went wrong. Please try again.";
     try { const j = await error.context.json(); if (j && j.error) msg = j.error; } catch (e) {}
@@ -1097,7 +1136,11 @@ function billingHTML() {
   const money = x => x ? `$${Number(x.value).toFixed(2)}` : "";
   const next = pp && pp.next_billing_time ? fmtDate(ymd(new Date(pp.next_billing_time)), { weekday: "short", month: "long", day: "numeric" }) : null;
   const owed = pp && pp.outstanding && Number(pp.outstanding.value) > 0;
-  const statusLabel = { active: "Active", past_due: "Payment due", cancelled: "Cancelled", suspended: "On hold", expired: "Ended", refunded: "Refunded" }[m.status] || m.status;
+  if (m.status === "paused") return `
+    <div class="kv"><span>Status</span><b>⏸ Paused</b></div>
+    <div class="kv"><span>Payments</span><b>Paused until ${fmtDate(m.paused_until || today(), { weekday: "short", month: "long", day: "numeric" })}</b></div>
+    <p class="fine">Nothing is charged while you're paused. Billing restarts on your restart date, and PayPal sets your next payment date from then.</p>`;
+  const statusLabel = { active: "Active", paused: "Paused", past_due: "Payment due", cancelled: "Cancelled", suspended: "On hold", expired: "Ended", refunded: "Refunded" }[m.status] || m.status;
   return `
     <div class="kv"><span>Status</span><b>${S.member ? "✅ " : "⛔ "}${esc(statusLabel)}</b></div>
     ${next && S.member ? `<div class="kv"><span>Next payment</span><b>${esc(CFG.monthlyPrice || "")} on ${next}</b></div>` : ""}
@@ -1165,15 +1208,15 @@ function renderSettings() {
     ${S.member ? `<div class="card" id="pauseCard">
       <h3>${pause ? "⏸ Your plan is paused" : "Pause my plan"}</h3>
       ${pause ? `<p>Paused since ${fmtDate(pause.start_date, { weekday: "short", month: "short", day: "numeric" })}${pause.end_date ? `. It restarts by itself on <strong>${fmtDate(pause.end_date, { weekday: "long", month: "long", day: "numeric" })}</strong>.` : ". It stays paused until you restart it."}</p>
-        <p class="muted">Paused days don't count toward your 21 days, so your plan ends later to make up for them.</p>
+        <p class="muted">Paused days don't count toward your 21 days, so your plan ends later to make up for them.${hasBilling() ? " Your payments are paused too." : ""}</p>
         <button class="btn btn-purple full big-btn" id="resumeBtn" style="margin-top:12px">Restart my plan now</button>`
       : `<p class="muted">Taking a few days off? Pause your plan and your 21 days move out by the same number of days. Your history is kept.</p>
         <p class="sec-title" style="margin-top:14px">How long?</p>
-        <div class="chips row-chips">${[3, 7, 14].map(n => `<button class="chip" data-days="${n}">${n} days</button>`).join("")}<button class="chip" data-days="0">Until I restart it</button></div>
+        <div class="chips row-chips">${[3, 7, 14].map(n => `<button class="chip" data-days="${n}">${n} days</button>`).join("")}</div>
         <label style="margin-top:14px">Or pick the day you'll be back<input type="date" id="resumeDate" min="${minDate}" max="${maxDate}"></label>
         <p class="muted" id="pausePreview" style="margin-top:10px"></p>
         <button class="btn btn-purple full big-btn" id="pauseBtn" style="margin-top:8px" disabled>Pause my plan</button>
-        <p class="fine">You can pause for up to ${MAX_PAUSE} days at a time and restart early whenever you like. Payments carry on as normal while you're paused.</p>`}
+        <p class="fine">You can pause for up to ${MAX_PAUSE} days at a time and restart early whenever you like.${hasBilling() ? " <strong>Payments pause too</strong> — PayPal won't charge you while you're paused, and billing picks up again when your plan restarts." : ""}</p>`}
     </div>` : ""}
 
     ${S.member ? `<div class="card danger-zone">
@@ -1241,19 +1284,17 @@ function renderSettings() {
   // pause
   if ($("resumeBtn")) $("resumeBtn").onclick = resumePlan;
   if ($("pauseBtn")) {
-    let choice = null;   // date string, or "" for open-ended
+    let choice = null;   // the date they'll be back
     const preview = () => {
-      $("pauseBtn").disabled = choice === null;
-      if (choice === null) { $("pausePreview").textContent = ""; return; }
-      const days = choice ? daysBetween(today(), choice) : 0;
+      $("pauseBtn").disabled = !choice;
+      if (!choice) { $("pausePreview").textContent = ""; return; }
+      const days = daysBetween(today(), choice);
       const end = roundWindow().end;
-      $("pausePreview").innerHTML = choice
-        ? `You'll be paused for <strong>${days} day${days === 1 ? "" : "s"}</strong> and back on <strong>${fmtDate(choice, { weekday: "long", month: "long", day: "numeric" })}</strong>. Your 21 days will end on ${fmtDate(addDaysStr(end, days), { month: "long", day: "numeric" })} instead of ${fmtDate(end, { month: "long", day: "numeric" })}.`
-        : "Your plan stays paused until you tap <strong>Restart my plan</strong>.";
+      $("pausePreview").innerHTML = `You'll be paused for <strong>${days} day${days === 1 ? "" : "s"}</strong> and back on <strong>${fmtDate(choice, { weekday: "long", month: "long", day: "numeric" })}</strong>. Your 21 days will end on ${fmtDate(addDaysStr(end, days), { month: "long", day: "numeric" })} instead of ${fmtDate(end, { month: "long", day: "numeric" })}.${hasBilling() ? " No payments are taken while you're paused." : ""}`;
     };
     view.querySelectorAll("[data-days]").forEach(b => b.onclick = () => {
       view.querySelectorAll("[data-days]").forEach(x => x.classList.toggle("on", x === b));
-      const n = +b.dataset.days; choice = n ? addDaysStr(today(), n) : ""; $("resumeDate").value = n ? choice : ""; preview();
+      choice = addDaysStr(today(), +b.dataset.days); $("resumeDate").value = choice; preview();
     });
     $("resumeDate").onchange = () => {
       const v = $("resumeDate").value;
@@ -1262,7 +1303,12 @@ function renderSettings() {
       if (v && choice === null) toast(`Pick a day between tomorrow and ${fmtDate(maxDate, { month: "short", day: "numeric" })}.`);
       preview();
     };
-    $("pauseBtn").onclick = () => pausePlan(choice || null);
+    $("pauseBtn").onclick = async () => {
+      if (!choice) return;
+      $("pauseBtn").disabled = true; $("pauseBtn").textContent = "Pausing…";
+      await pausePlan(choice);
+      if ($("pauseBtn")) { $("pauseBtn").disabled = false; $("pauseBtn").textContent = "Pause my plan"; }
+    };
   }
   if ($("cancelBtn")) $("cancelBtn").onclick = () => go("settings", "cancel");
   $("logoutBtn2").onclick = async () => { await sb.auth.signOut(); location.replace("login.html?mode=login"); };

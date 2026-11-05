@@ -1,5 +1,5 @@
 // RejuvaSleep — lets a signed-in member see and manage their own subscription.
-// Actions: "status" | "cancel" | "retry"
+// Actions: "status" | "cancel" | "retry" | "pause" (with resume_on) | "resume"
 // Uses the same secrets as paypal-webhook (PAYPAL_CLIENT_ID, PAYPAL_SECRET, optional PAYPAL_ENV).
 
 const PAYPAL_API = Deno.env.get("PAYPAL_ENV") === "sandbox" ? "https://api-m.sandbox.paypal.com" : "https://api-m.paypal.com";
@@ -59,8 +59,8 @@ Deno.serve(async (req) => {
   const user = await u.json();
   const email = String(user.email || "").toLowerCase();
 
-  let action = "status";
-  try { action = (await req.json()).action || "status"; } catch { /* default */ }
+  let action = "status", body: any = {};
+  try { body = await req.json(); action = body.action || "status"; } catch { /* default */ }
 
   try {
     const rows = await db(`memberships?email=eq.${encodeURIComponent(email)}&select=*`);
@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
     if (action === "status") {
       const s = await sub();
       return json(200, {
-        membership: { plan: m.plan, status: m.status, paid_until: m.paid_until, next_billing_at: m.next_billing_at, cancelled_at: m.cancelled_at },
+        membership: { plan: m.plan, status: m.status, paid_until: m.paid_until, next_billing_at: m.next_billing_at, cancelled_at: m.cancelled_at, paused_until: m.paused_until },
         paypal: s && {
           status: s.status,
           next_billing_time: s.billing_info?.next_billing_time || null,
@@ -116,6 +116,44 @@ Deno.serve(async (req) => {
       if (!r.ok) return json(400, { error: "PayPal couldn't take the payment. Please update your payment method in PayPal and try again." });
       if (s.status === "SUSPENDED") await paypal(token, "POST", `/v1/billing/subscriptions/${m.subscription_id}/activate`, { reason: "Balance paid" });
       return json(200, { charged: true, amount: due });
+    }
+
+    if (action === "pause") {
+      // Pause billing until the restart date (1–14 days from today)
+      const resumeOn = String(body.resume_on || "");
+      const days = Math.round((Date.parse(resumeOn + "T12:00:00Z") - Date.parse(new Date().toISOString().slice(0, 10) + "T12:00:00Z")) / 864e5);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(resumeOn) || days < 1 || days > 15) return json(400, { error: "Please choose a restart date within the next 14 days." });
+      if (m.status === "paused") return json(200, { paused: true });
+      if (m.subscription_id) {
+        token = await paypalToken();
+        const r = await paypal(token, "POST", `/v1/billing/subscriptions/${m.subscription_id}/suspend`, { reason: `Member paused until ${resumeOn}` });
+        if (!r.ok && r.status !== 422) throw new Error(`PayPal couldn't pause billing (${r.status})`);
+      }
+      // keep access through the pause and a few days after it ends
+      const keep = new Date(Date.parse(resumeOn + "T12:00:00Z") + 3 * 864e5).toISOString();
+      const paidUntil = m.paid_until && m.paid_until > keep ? m.paid_until : keep;
+      await db(`memberships?email=eq.${encodeURIComponent(email)}`, {
+        method: "PATCH", headers: { prefer: "return=minimal" },
+        body: JSON.stringify({ status: "paused", paused_until: resumeOn, paid_until: m.plan === "lifetime" ? m.paid_until : paidUntil }),
+      });
+      console.log(`Member ${email} paused until ${resumeOn}`);
+      return json(200, { paused: true, billing_paused: !!m.subscription_id });
+    }
+
+    if (action === "resume") {
+      if (m.status !== "paused") return json(200, { resumed: true });
+      let nextBilling: string | null = null;
+      if (m.subscription_id) {
+        token = await paypalToken();
+        const r = await paypal(token, "POST", `/v1/billing/subscriptions/${m.subscription_id}/activate`, { reason: "Member restarted their plan" });
+        if (!r.ok && r.status !== 422) throw new Error(`PayPal couldn't restart billing (${r.status})`);
+        const s = await sub(); nextBilling = s?.billing_info?.next_billing_time || null;
+      }
+      const fields: any = { status: "active", paused_until: null };
+      if (nextBilling) { fields.next_billing_at = nextBilling; fields.paid_until = new Date(Date.parse(nextBilling) + 3 * 864e5).toISOString(); }
+      await db(`memberships?email=eq.${encodeURIComponent(email)}`, { method: "PATCH", headers: { prefer: "return=minimal" }, body: JSON.stringify(fields) });
+      console.log(`Member ${email} resumed`);
+      return json(200, { resumed: true, next_billing_at: nextBilling });
     }
 
     return json(400, { error: "Unknown action" });

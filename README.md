@@ -28,7 +28,8 @@ Table Editor → `library` → Insert row: `slug` (e.g. `gua-sha-video`), `kind`
 
 ## Plan rules
 - Day 1 is the day the member first subscribed. Plans run in 21-day rounds that roll on automatically.
-- Paused days (`pauses` table) don't count, so the round ends later. Pauses can have a restart date or be open-ended.
+- Paused days (`pauses` table) don't count, so the round ends later. Every pause has a restart date up to 14 days away. Pausing also suspends PayPal billing (`manage-subscription` pause/resume); the hourly `resume-due` job restarts billing on the restart date, and the webhook ignores the SUSPENDED event for member pauses.
+- Learn groups articles by a `topic:` tag in `library.targets` (`topic:positions`, `topic:practices`); untagged articles show under "Sleep and skin basics".
 - Cancelling (Settings, or in PayPal) stops the plan right away: no more charges, history kept, no new entries. Restarting picks up on the same day.
 - Billing wording follows `billingDays` in `js/config.js` (0 = monthly, 21 = every 21 days). Change it only when the PayPal plan matches.
 

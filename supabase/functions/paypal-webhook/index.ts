@@ -84,7 +84,7 @@ async function grantSubscription(sub: any): Promise<Response> {
     console.log(`Ignored subscription ${sub.id}: plan ${sub.plan_id} is not ${PLAN_ID}`);
     return json(200, { ignored: "plan" });
   }
-  const fields = { plan: "monthly", status: "active", paid_until: paidUntil(sub), next_billing_at: sub?.billing_info?.next_billing_time || null, cancelled_at: null };
+  const fields = { plan: "monthly", status: "active", paid_until: paidUntil(sub), next_billing_at: sub?.billing_info?.next_billing_time || null, cancelled_at: null, paused_until: null };
   // Renewals: update the row already linked to this subscription (works even if the member changed their email)
   const linked = await db(`memberships?subscription_id=eq.${encodeURIComponent(sub.id)}`, {
     method: "PATCH", headers: { prefer: "return=representation" }, body: JSON.stringify(fields),
@@ -149,8 +149,13 @@ Deno.serve(async (req) => {
       return json(200, { past_due: true });
     }
     if (type === "BILLING.SUBSCRIPTION.SUSPENDED" || type === "BILLING.SUBSCRIPTION.EXPIRED") {
-      await setSubscription(res.id, { status: type.split(".").pop()!.toLowerCase(), paid_until: iso(new Date()) });
-      console.log(`Subscription ${res.id} ${type}; access ended`);
+      // A member's own pause also suspends billing in PayPal; that must not end their access
+      const target = type.endsWith("SUSPENDED") ? `${encodeURIComponent(res.id)}&status=neq.paused` : encodeURIComponent(res.id);
+      await db(`memberships?subscription_id=eq.${target}`, {
+        method: "PATCH", headers: { prefer: "return=minimal" },
+        body: JSON.stringify({ status: type.split(".").pop()!.toLowerCase(), paid_until: iso(new Date()) }),
+      });
+      console.log(`Subscription ${res.id} ${type} handled (member pauses are left alone)`);
       return json(200, { ended: true });
     }
     if (type === "PAYMENT.SALE.REFUNDED" || type === "PAYMENT.SALE.REVERSED") {
